@@ -1,31 +1,7 @@
 #include "particles.h"
-#include <random>
+#include "../random/random.h"
+
 #include <string.h>
-
-namespace _particle_engine_rand
-{
-    std::random_device rd;
-    std::seed_seq seed{ rd(), rd(), rd(), rd(), rd(), rd(), rd(), rd() };
-    std::mt19937 rand_engine(seed);
-
-    float uniform_real_dist(float min, float max)
-    {
-        std::uniform_real_distribution<float> dist(min, max);
-        return dist(rand_engine);
-    }
-
-    float normal_dist(float mean, float sigma)
-    {
-        std::normal_distribution<float> dist(mean, sigma);
-        return dist(rand_engine);
-    }
-
-    uint64_t uniform_uint64_dist(uint64_t min, uint64_t max)
-    {
-        std::uniform_int_distribution<uint64_t> dist(min, max);
-        return dist(rand_engine);
-    }
-}
 
 ParticleEngine::ParticleEngine(void)
 {
@@ -65,7 +41,7 @@ void ParticleEngine::init(const Config& config)
 
 void ParticleEngine::engine_func(ParticleEngine* instance, std::chrono::milliseconds start_delay)
 {
-    using namespace _particle_engine_rand;
+    using namespace __internal_random;
     using namespace std::chrono;
 
     std::this_thread::sleep_for(start_delay);

@@ -86,7 +86,7 @@ void ParticleRenderer::create_pipeline(const Config& config)
     depth_state.pNext = nullptr;
     depth_state.flags = 0;
     depth_state.depthTestEnable = VK_TRUE;
-    depth_state.depthWriteEnable = VK_TRUE;
+    depth_state.depthWriteEnable = VK_FALSE;
     depth_state.depthCompareOp = VK_COMPARE_OP_LESS;
     depth_state.depthBoundsTestEnable = VK_FALSE;
     depth_state.stencilTestEnable = VK_FALSE;

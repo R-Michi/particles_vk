@@ -14,7 +14,7 @@ include_directories(
     "${CMAKE_CURRENT_SOURCE_DIR}/lib/glm"
     "${CMAKE_CURRENT_SOURCE_DIR}/lib/stb_master"
     "${CMAKE_CURRENT_SOURCE_DIR}/lib/tiny_obj_loader"
-    "${CMAKE_CURRENT_SOURCE_DIR}/lib/vka-1.0.0/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/vka-1.1.0/include"
 )
 
 # linker search directories for libraries
@@ -22,11 +22,11 @@ link_directories(
     "C:/VulkanSDK/1.2.170.0/Lib"
     "${CMAKE_CURRENT_SOURCE_DIR}/lib/glfw-3.3.3/lib"
     "${CMAKE_CURRENT_SOURCE_DIR}/lib/glm/glm/lib"
-    "${CMAKE_CURRENT_SOURCE_DIR}/lib/vka-1.0.0/lib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/vka-1.1.0/lib"
 )
 
 # compile and link executable
-add_executable(particles "main.cpp" "VulkanApp.cpp" "particles/particles.h" "particles/particle.cpp" "particles/particle_engine.cpp" "particles/vertex.cpp" "particles/particle_renderer.cpp")
+add_executable(particles "main.cpp" "VulkanApp.cpp" "particles/particle.cpp" "particles/particle_engine.cpp" "particles/vertex.cpp" "particles/particle_renderer.cpp" "random/random.cpp")
 target_link_libraries(particles PRIVATE
     "-lvulkan_abstraction"
     "-lglm_static" 

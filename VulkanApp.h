@@ -25,10 +25,39 @@ public:
         float sesitivity;
     };
 
+    struct DirectionalLight
+    {
+        alignas(16) glm::vec3 direction;
+        alignas(16) glm::vec3 intensity;
+    };
+
+    struct Material
+    {
+        glm::vec3 albedo;
+        float roughness;
+        float metallic;
+        float alpha;
+    };
+
+    struct FragmentVariables
+    {
+        alignas(16) glm::vec3 cam_pos;
+        alignas(4)  int kernel_radius;
+        alignas(4)  float penumbra_size;
+        alignas(8)  glm::vec2 jitter_scale;
+        alignas(4)  float inv_shadow_map_size;
+    };
+
 private:
+    struct ShadowTransformMatrices
+    {
+        glm::mat4 MVP;
+    };
+
     struct TransformMatrices
     {
         glm::mat4 MVP;
+        glm::mat4 light_MVP;
     };
 
     /* CONSTANTS */
@@ -38,6 +67,13 @@ private:
     constexpr static VkColorSpaceKHR SWAPCHAIN_COLOR_SPACE = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     constexpr static VkPresentModeKHR PRESENTATION_MODE = VK_PRESENT_MODE_MAILBOX_KHR;
     constexpr static VkFormat DEPTH_FORMAT = VK_FORMAT_D24_UNORM_S8_UINT;
+    constexpr static VkFormat SHADOW_DEPTH_FORMAT = VK_FORMAT_D16_UNORM;
+    constexpr static size_t N_DIRECTIONAL_LIGHTS = 1;
+    constexpr static size_t N_MATERIALS = 2;
+    constexpr static uint32_t SHADOW_MAP_RESOLUTION = 2048;
+    constexpr static uint32_t SHADOW_MAP_KERNEL_RADIUS = 2;
+    constexpr static uint32_t SHADOW_MAP_SAMPLES = (2 * SHADOW_MAP_KERNEL_RADIUS + 1) * (2 * SHADOW_MAP_KERNEL_RADIUS + 1);
+    constexpr static float SHADOW_PENUMBRA_SIZE = 2.0f;
 
     // shader paths
     constexpr static char SHADER_STATIC_SCENE_VERTEX_PATH[] = "../../../assets/shaders/out/static_scene.vert.spv";
@@ -45,6 +81,7 @@ private:
     constexpr static char PARTICLE_VERTEX_PATH[] = "../../../assets/shaders/out/particles.vert.spv";
     constexpr static char PARTICLE_GEOMETRY_PATH[] = "../../../assets/shaders/out/particles.geom.spv";
     constexpr static char PARTICLE_FRAGMENT_PATH[] = "../../../assets/shaders/out/particles.frag.spv";
+    constexpr static char DIRECTIONAL_SHADOW_VERTEX_PATH[] = "../../../assets/shaders/out/dir_shadow.vert.spv";
 
     // texture path
     constexpr static char TEXTURE_FLOOR[] = "../../../assets/textures/floor_tex.jpg";
@@ -64,6 +101,7 @@ private:
     const GLFWvidmode* vmode;
     GLFWwindow* window;
     int width, height, posx, posy;
+    double render_time = 0.0;
 
     /* VULKAN VARIABLES */
     VkApplicationInfo app_info;
@@ -78,17 +116,26 @@ private:
     VkSwapchainKHR swapchain;
     std::vector<VkImageView> swapchain_views;
     std::vector<VkFramebuffer> swapchain_fbos;
+    VkFramebuffer fbo_dir_shadow;
 
     vka::AttachmentImage depth_attachment;
     VkRenderPass renderpass_main;
 
+    vka::AttachmentImage directional_shadow_map;
+    VkSampler dir_shadow_sampler;
+    VkRenderPass renderpass_dir_shadow;
+
     // pipeline of static scene (floor + fountain)
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
+    
+    VkPipelineLayout pipeline_layout_dir_shadow;
+    VkPipeline pipeline_dir_shadow;
 
     VkCommandPool command_pool;
     std::vector<VkCommandBuffer> primary_command_buffers;
     VkCommandBuffer static_scene_command_buffer;
+    VkCommandBuffer dir_shadow_command_buffer;
 
     // floor
     std::vector<vka::vertex323_t> floor_vertices;
@@ -102,21 +149,36 @@ private:
     vka::Buffer fountain_vertex_buffer, fountain_index_buffer;
     vka::Texture fountain_texture;
 
+    // other textures
+    vka::Texture jitter_map;
+
     // uniform buffers
     vka::Buffer tm_buffer;  // transform matrices buffer
+    vka::Buffer directional_light_buffer;
+    vka::Buffer material_buffer;
+    vka::Buffer fragment_variables_buffer;
+    vka::Buffer tm_buffer_dir_shadow;
 
     VkDescriptorPool descriptor_pool;
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
     std::vector<VkDescriptorSet> descriptor_sets;
 
+    VkDescriptorPool descriptor_pool_dir_shadow;
+    std::vector<VkDescriptorSetLayout> descriptor_set_layouts_dir_shadow;
+    std::vector<VkDescriptorSet> descriptor_sets_dir_shadow;
+
     VkSemaphore image_ready, rendering_done;
+    VkFence render_fence;
 
     ParticleRenderer particle_renderer;
     ParticleEngine particle_engine;
+    DirectionalLight directional_light;
 
     void load_models(void);
     void load_floor(void);
     void load_fountain(void);
+
+    void init_lights(void);
 
     void init_glfw(void);
     void destry_glfw(void);
@@ -134,9 +196,15 @@ private:
     void create_depth_attachment(void);
     void create_render_pass(void);
 
+    void create_shadow_maps(void);
+    void create_shadow_renderpasses(void);
+
+    static void get_vertex323_descriptions(std::vector<VkVertexInputBindingDescription>& bindings, std::vector<VkVertexInputAttributeDescription>& attributes);
     void create_pipeline(void);
+    void create_shadow_pipelines(void);
 
     void create_framebuffers(void);
+    void create_shadow_framebuffers(void);
     void create_command_pool(void);
     void create_command_buffers(void);
 
@@ -145,9 +213,10 @@ private:
     void create_uniform_buffers(void);
     void create_textures(void);
 
-    void create_desciptor_pool(void);
+    void create_desciptor_pools(void);
     void create_desciptor_set_layouts(void);
     void create_descriptor_sets(void);
+    void create_descriptor_sets_dir_shadow(void);
 
     void create_semaphores(void);
 
@@ -155,6 +224,7 @@ private:
 
     void record_commands(void);
     void record_static_scene(void);
+    void record_dir_shadow_map(void);
     void record_primary_commands(void);
 
     void draw_frame(void);
@@ -164,6 +234,11 @@ private:
     void mouse_action(GLFWwindow* window, int width, int height, double& yaw, double& pitch, float sensetivity);
     void move_action(GLFWwindow* window, glm::vec3& pos, const glm::vec3 velocity);
     void update_frame_contents(void);
+
+    void update_lights(void);
+    void update_materials(void);
+
+    static float get_depth_bias(float bias, uint32_t depth_bits);
     
 public:
     ParticlesApp(void);
@@ -171,6 +246,7 @@ public:
 
     void init(void);
     void run(void);
+    void shutdown(void);
 
     inline static Config& config(void) { return _config; };
 };

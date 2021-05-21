@@ -19,6 +19,7 @@ int main()
         ParticlesApp::config() = cfg;
         app.init();
         app.run();
+        app.shutdown();
     }
     catch (std::invalid_argument& e)
     {
