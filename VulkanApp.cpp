@@ -60,7 +60,7 @@ void ParticlesApp::load_floor(void)
 #endif
 
     this->floor_indices = {
-        3, 0, 1, 1, 2, 3
+        1, 0, 3, 3, 2, 1
     };
 }
 
@@ -691,8 +691,8 @@ void ParticlesApp::create_pipeline(void)
     rasterizer_create_info.depthClampEnable = VK_FALSE;
     rasterizer_create_info.rasterizerDiscardEnable = VK_FALSE;
     rasterizer_create_info.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer_create_info.cullMode = VK_CULL_MODE_NONE;
-    rasterizer_create_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer_create_info.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer_create_info.frontFace = VK_FRONT_FACE_CLOCKWISE;
     rasterizer_create_info.depthBiasEnable = VK_FALSE;
     rasterizer_create_info.depthBiasConstantFactor = 0.0f;
     rasterizer_create_info.depthBiasClamp = 0.0f;
@@ -848,8 +848,8 @@ void ParticlesApp::create_shadow_pipelines(void)
     dir_shadow_rasterizer_state.depthClampEnable = VK_FALSE;
     dir_shadow_rasterizer_state.rasterizerDiscardEnable = VK_FALSE;
     dir_shadow_rasterizer_state.polygonMode = VK_POLYGON_MODE_FILL;
-    dir_shadow_rasterizer_state.cullMode = VK_CULL_MODE_NONE;
-    dir_shadow_rasterizer_state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    dir_shadow_rasterizer_state.cullMode = VK_CULL_MODE_BACK_BIT;
+    dir_shadow_rasterizer_state.frontFace = VK_FRONT_FACE_CLOCKWISE;
     dir_shadow_rasterizer_state.depthBiasEnable = VK_TRUE;
     dir_shadow_rasterizer_state.depthBiasConstantFactor = 0.0f;
     dir_shadow_rasterizer_state.depthBiasClamp = 0.0f;
@@ -1277,7 +1277,7 @@ void ParticlesApp::create_textures(void)
     srr.levelCount = 1;
 
     // generate jitter map
-    const size_t jitter_buffer_size = 2 * this->vmode->width * this->vmode->height * SHADOW_MAP_SAMPLES;
+    const size_t jitter_buffer_size = this->vmode->width * this->vmode->height * SHADOW_MAP_SAMPLES_DIV_2 * 4;
     uint8_t* jitter_buff = new uint8_t[jitter_buffer_size];
 
     for (size_t i = 0; i < jitter_buffer_size; i++)
@@ -1287,17 +1287,17 @@ void ParticlesApp::create_textures(void)
 
     this->jitter_map.set_image_flags(0);
     this->jitter_map.set_image_type(VK_IMAGE_TYPE_3D);
-    this->jitter_map.set_image_extent({ static_cast<uint32_t>(this->vmode->width), static_cast<uint32_t>(this->vmode->height), SHADOW_MAP_SAMPLES });
+    this->jitter_map.set_image_extent({ static_cast<uint32_t>(this->vmode->width), static_cast<uint32_t>(this->vmode->height), SHADOW_MAP_SAMPLES_DIV_2 });
     this->jitter_map.set_image_array_layers(1);
-    this->jitter_map.set_image_format(VK_FORMAT_R8G8_UNORM);
+    this->jitter_map.set_image_format(VK_FORMAT_R8G8B8A8_UNORM);
     this->jitter_map.set_image_queue_families(this->graphics_queue_family_index);
 
     this->jitter_map.set_view_components({});
-    this->jitter_map.set_view_format(VK_FORMAT_R8G8_UNORM);
+    this->jitter_map.set_view_format(VK_FORMAT_R8G8B8A8_UNORM);
     this->jitter_map.set_view_type(VK_IMAGE_VIEW_TYPE_3D);
     this->jitter_map.set_view_subresource_range(srr);
 
-    this->jitter_map.set_sampler_address_mode(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    this->jitter_map.set_sampler_address_mode(VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
     this->jitter_map.set_sampler_anisotropy_enable(false);
     this->jitter_map.set_sampler_max_anisotropy(0);
     this->jitter_map.set_sampler_border_color(VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK);
@@ -1315,7 +1315,7 @@ void ParticlesApp::create_textures(void)
     this->jitter_map.set_command_pool(this->command_pool);
     this->jitter_map.set_queue(this->graphics_queue);
 
-    VULKAN_ASSERT(this->jitter_map.create(jitter_buff, 2 * sizeof(uint8_t)));
+    VULKAN_ASSERT(this->jitter_map.create(jitter_buff, 4 * sizeof(uint8_t)));
     delete[] jitter_buff;
 }
 
@@ -1604,8 +1604,8 @@ void ParticlesApp::init_particles(void)
     engine_config.min_size = 0.15f;
     engine_config.max_size = 0.20f;
     engine_config.ground_level = 0.0f;
-    engine_config.min_ttl = std::chrono::milliseconds(5000);
-    engine_config.max_ttl = std::chrono::milliseconds(6000);
+    engine_config.min_ttl = std::chrono::milliseconds(15000);
+    engine_config.max_ttl = std::chrono::milliseconds(16000);
 
     this->particle_engine.init(engine_config);
     this->particle_engine.start(std::chrono::milliseconds(3000));
@@ -1772,8 +1772,8 @@ void ParticlesApp::record_dir_shadow_map(void)
     scissor.offset = { 0, 0 };
     scissor.extent = { SHADOW_MAP_RESOLUTION, SHADOW_MAP_RESOLUTION };
 
-    float min_depth_bias = 100.0f;
-    float max_depth_bias = 100.0f;
+    float min_depth_bias = 200.0f;
+    float max_depth_bias = 200.0f;
     float depth_slope_factor = 0.0f;
 
     vkCmdBindPipeline(this->dir_shadow_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, this->pipeline_dir_shadow);

@@ -46,7 +46,9 @@ void Particle::update(std::chrono::nanoseconds dt, float ground_level, float gra
     {
         float under_ground = ground_level - this->_vertex.pos.y;
         this->_vertex.pos.y = ground_level + under_ground;
-        this->_velocity.y *= -bounce_factor;
+        //this->_velocity.y *= -bounce_factor;
+        this->_velocity *= bounce_factor;
+        this->_velocity.y = -this->_velocity.y;
     }
 
     // velocity decreases, v(t) = v(t) + dv(t) -> v(t) = v0 - g * t -> dv(t) = a(t) = -g * t -> v(t) = v(t) - g * dt

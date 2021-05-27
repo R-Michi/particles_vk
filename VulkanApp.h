@@ -72,7 +72,8 @@ private:
     constexpr static size_t N_MATERIALS = 2;
     constexpr static uint32_t SHADOW_MAP_RESOLUTION = 2048;
     constexpr static uint32_t SHADOW_MAP_KERNEL_RADIUS = 2;
-    constexpr static uint32_t SHADOW_MAP_SAMPLES = (2 * SHADOW_MAP_KERNEL_RADIUS + 1) * (2 * SHADOW_MAP_KERNEL_RADIUS + 1);
+    constexpr static uint32_t SHADOW_MAP_SAMPLES = 16;
+    constexpr static uint32_t SHADOW_MAP_SAMPLES_DIV_2 = SHADOW_MAP_SAMPLES / 2;
     constexpr static float SHADOW_PENUMBRA_SIZE = 2.0f;
 
     // shader paths

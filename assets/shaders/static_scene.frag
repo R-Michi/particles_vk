@@ -1,6 +1,7 @@
 #version 460 core
 #extension GL_ARB_separate_shader_objects : enable
-#define M_PI 3.14159265358979323846f
+#define M_PI    3.1415926535897f
+#define M_2PI   6.2831853071794f
 #define DISPLAY_SHADOW_MAP 0
 
 // ---------------------------- STRUCTS ----------------------------
@@ -125,63 +126,70 @@ vec3 directional_light(DirectionalLight L, Material M, vec3 V, vec3 N)
     return (kd * (M.albedo / M_PI) + specular) * radiance * NdotL;
 }
 
-float shadow_value(vec4 light_space_pos, int kernel_radius, float penumbra_size, vec2 jitter_scale, float inv_shadow_map_size, float NdotL)
+vec2 vogeldisk_sample(int sample_index, int samples_count, float phi, float disk_radius, vec2 center)
 {
-    const float pcf_matrix_sqrt     = 2 * kernel_radius + 1;
-    const float shadow_contribution = 1.0f / (pcf_matrix_sqrt * pcf_matrix_sqrt);
-    const float offset_scale        = inv_shadow_map_size * penumbra_size;   // inv_shadow_map_size * x, where x defines the size of the penumbra
-    const float early_bail_offset   = ((1 + kernel_radius) * penumbra_size) * inv_shadow_map_size;
-
-    // coordinate for to sample to jitter map
-    vec3 jcoord = vec3(gl_FragCoord.xy * jitter_scale, 0.0f);
-
-    // perspective devide of light space position
-    // x and y store the normalized screen coordinates [-1.0, +1.0]
-    // z stores the depth in the view of the light source
-    vec3 light_project_coords = light_space_pos.xyz / light_space_pos.w; 
-    if(light_project_coords.z > 1.0f)
-        return 1.0f;
-
-    // texture coordinates interval is [0.0, 1.0]
-    light_project_coords.xy = light_project_coords.xy * 0.5f + 0.5f;
-
-    /* early bailing */
-    float sum = 0.0f;
-    // take the samples of the corners of the sample matrix
-    sum += texture(directional_shadow_map, vec3(light_project_coords.xy + vec2(+early_bail_offset), light_project_coords.z));
-    sum += texture(directional_shadow_map, vec3(light_project_coords.xy + vec2(-early_bail_offset, +early_bail_offset), light_project_coords.z));
-    sum += texture(directional_shadow_map, vec3(light_project_coords.xy + vec2(+early_bail_offset, -early_bail_offset), light_project_coords.z));
-    sum += texture(directional_shadow_map, vec3(light_project_coords.xy + vec2(-early_bail_offset), light_project_coords.z));
-
-    // additional samples to minimize the shadow error
-    // remove those 4 lines for slightly better performance but there will be more shadow-artefacts
-#if 1
-    sum += texture(directional_shadow_map, vec3(light_project_coords.xy + vec2(+early_bail_offset, 0.0f), light_project_coords.z));
-    sum += texture(directional_shadow_map, vec3(light_project_coords.xy + vec2(-early_bail_offset, 0.0f), light_project_coords.z));
-    sum += texture(directional_shadow_map, vec3(light_project_coords.xy + vec2(0.0f, +early_bail_offset), light_project_coords.z));
-    sum += texture(directional_shadow_map, vec3(light_project_coords.xy + vec2(0.0f, -early_bail_offset), light_project_coords.z));
-#endif
-
-    // if fragment is not at the penumbra, we dont need any more samples
-    // 0.0f ... completely in shadow
-    // 4.0f ... completely in light
-    if(sum == 8.0f || sum == 0.0f || NdotL < 0.0f)
-        return (sum == 0.0f) ? 0.0f : 1.0f;
-
-    float visibility = 0.0f;
-    for(int i=-kernel_radius; i<=kernel_radius; i++)
-    {
-        for(int j=-kernel_radius; j<=kernel_radius; j++)
-        {
-            vec2 jitter_value = texture(jitter_map, jcoord).rg - 0.5f;
-            vec2 offset = (vec2(i, j) + jitter_value) * offset_scale;
-            visibility += texture(directional_shadow_map, vec3(light_project_coords.xy + offset, light_project_coords.z));
-            jcoord.z += shadow_contribution;
-        }
-    }
-    return visibility * shadow_contribution;
+    float theta = 2.4f * float(sample_index) + phi;
+    float r = sqrt(float(sample_index) + 0.5f) / sqrt(float(samples_count));
+    vec2 u = r * vec2(cos(theta), sin(theta));
+    return center + u * disk_radius;
 }
 
+float interleaved_gradient_noise(vec2 pos)
+{
+    vec3 seed = vec3(0.06711056f, 0.00583715f, 52.9829189f);
+    return fract(seed.z * fract(dot(pos, seed.xy)));
+}
+
+int get_test_sample_count(int count)
+{
+    if(count > 16)
+        return 8;
+    else if(count > 8)
+        return 6;
+    else if(count > 4)
+        return 4;
+    return 0;
+}
+
+float shadow_value(vec4 light_space_pos, int samples, float penumbra_size, float NdotL)
+{
+    const int test_samples = get_test_sample_count(samples);
+    const int test_samples_end = samples - test_samples;
+
+    // make a perspective divide -> transforms light space coordinates to NDC coodinates range [-1, +1]
+    vec3 light_project_coords = light_space_pos.xyz / light_space_pos.w;
+    if(light_project_coords.z > 1.0f)
+        return 1.0f;
+    
+    // texture coordinates have a range of [0, +1]
+    light_project_coords.xy = light_project_coords.xy * 0.5f + 0.5f;
+
+    float visibility = 0.0f;
+    vec3 sm_coords = light_project_coords;
+
+    // take a few test samples
+    for(int i = samples - 1; i >= test_samples_end; i--)
+    {
+        const float noise = interleaved_gradient_noise(gl_FragCoord.xy) * M_2PI;
+        sm_coords.xy = vogeldisk_sample(i, samples, noise, penumbra_size, light_project_coords.xy);
+        visibility += texture(directional_shadow_map, sm_coords);
+    }
+
+    if(visibility == test_samples)          return 1.0f;    // completely in light
+    if(visibility == 0.0f || NdotL < 0.0f)  return 0.0f;    // compelely in shadow
+
+    // at this point in the code, we are at the penumbra of the shadow 
+    // only do the expensive sampling at the penumbra region
+    // expensive sampling reduced to as few pixels as possible
+    for(int i = test_samples_end - 1; i >= 0; i--)
+    {
+        const float noise = interleaved_gradient_noise(gl_FragCoord.xy) * M_2PI;
+        sm_coords.xy = vogeldisk_sample(i, samples, noise, penumbra_size, light_project_coords.xy);
+        visibility += texture(directional_shadow_map, sm_coords);
+    }
+
+    return visibility / samples; // visibility range [0, +1]
+}
 // ---------------------------- MAIN ----------------------------
 
 void main()
@@ -195,10 +203,8 @@ void main()
 
     float shadow = shadow_value(
         f_light_space_pos, 
-        fragment_variables.kernel_radius, 
-        fragment_variables.penumbra_size, 
-        fragment_variables.jitter_scale, 
-        fragment_variables.inv_shadow_map_size,
+        16,
+        0.005f,
         NdotL
     );
 
