@@ -13,7 +13,7 @@
     #define M_PI 3.14159265358979323846
 #endif
 
-#define VALIDATION_LAYERS 0
+#define VALIDATION_LAYERS 1
 #define DISPLAY_SHADOW_MAP 0
 #define shader_sizeof(type)     (((sizeof(type) / 16) + 1) * 16)
 #define shader_at(type, ptr, i) ((type*)(ptr + shader_sizeof(type) * i))
@@ -24,7 +24,7 @@ void __key_callback(GLFWwindow* window, int key, int scancode, int action, int m
 
 ParticlesApp::ParticlesApp(void)
 {
-    this->swapchain = VK_NULL_HANDLE;
+    
 }
 
 ParticlesApp::~ParticlesApp(void)
@@ -67,7 +67,7 @@ void ParticlesApp::load_floor(void)
 void ParticlesApp::load_fountain(void)
 {
     vka::Model323 fountain;
-    fountain.load(MODEL_FOUNTAIN);
+    fountain.load(ParticlesConstants::MODEL_FOUNTAIN);
     fountain.combine(this->fountain_vertices, this->fountain_indices);
 }
 
@@ -123,20 +123,10 @@ void ParticlesApp::init_vulkan(void)
     this->create_physical_device();
     this->create_queues();
     this->create_device();
-    this->create_swapchain();
 
-    this->create_depth_attachment();
-    this->create_render_pass();
+    this->onscreen_renderpass.init(this->physical_device, this->device, this->surface, this->graphics_queue_family_index, this->width, this->height);
+    this->directional_shadow_map.init(this->physical_device, this->device, this->graphics_queue_family_index, ParticlesConstants::SHADOW_MAP_RESOLUTION);
 
-    this->create_shadow_maps();
-    this->create_shadow_renderpasses();
-
-    this->create_desciptor_set_layouts();
-    this->create_pipeline();
-    this->create_shadow_pipelines();
-
-    this->create_framebuffers();
-    this->create_shadow_framebuffers();
     this->create_command_pool();
     this->create_command_buffers();
 
@@ -145,9 +135,12 @@ void ParticlesApp::init_vulkan(void)
     this->create_uniform_buffers();
     this->create_textures();
 
-    this->create_desciptor_pools();
-    this->create_descriptor_sets();
-    this->create_descriptor_sets_dir_shadow();
+    this->init_main_descriptor_manager();
+    this->init_dir_shadow_descriptor_manager();
+
+    this->create_pipeline();
+    this->create_shadow_pipelines();
+
 
     this->create_semaphores();
 
@@ -233,11 +226,11 @@ void ParticlesApp::create_physical_device(void)
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT };
     filter.reqDeviceTypeHirachy = { VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU };
     filter.pSurface = &this->surface;
-    filter.reqMinImageCount = SWAPCHAIN_IMAGES;
-    filter.reqMaxImageCount = SWAPCHAIN_IMAGES;
-    filter.reqSurfaceImageUsageFlags = SWAPCHAIN_IMAGE_USAGE;
-    filter.reqSurfaceColorFormats = { SWAPCHAIN_FORMAT };
-    filter.reqSurfaceColorSpaces = { SWAPCHAIN_COLOR_SPACE };
+    filter.reqMinImageCount = ParticlesConstants::SWAPCHAIN_IMAGES;
+    filter.reqMaxImageCount = ParticlesConstants::SWAPCHAIN_IMAGES;
+    filter.reqSurfaceImageUsageFlags = ParticlesConstants::SWAPCHAIN_IMAGE_USAGE;
+    filter.reqSurfaceColorFormats = { ParticlesConstants::SWAPCHAIN_FORMAT };
+    filter.reqSurfaceColorSpaces = { ParticlesConstants::SWAPCHAIN_COLOR_SPACE };
     filter.reqPresentModes = { VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_MAILBOX_KHR };
     filter.reqQueueFamilyFlags = { VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_TRANSFER_BIT };
 
@@ -319,291 +312,85 @@ void ParticlesApp::create_device(void)
     vkGetDeviceQueue(this->device, this->graphics_queue_family_index, 0, &this->graphics_queue);
 }
 
-void ParticlesApp::create_swapchain(void)
+
+void ParticlesApp::init_main_descriptor_manager(void)
 {
-    VkSwapchainKHR old_swapchain = this->swapchain;
+    this->main_descr_manager.set_device(this->device);
+    this->main_descr_manager.set_number_of_sets(1);
 
-    VkSwapchainCreateInfoKHR swapchain_create_info = {};
-    swapchain_create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    swapchain_create_info.pNext = nullptr;
-    swapchain_create_info.flags = 0;
-    swapchain_create_info.surface = this->surface;
-    swapchain_create_info.minImageCount = SWAPCHAIN_IMAGES;
-    swapchain_create_info.imageFormat = SWAPCHAIN_FORMAT;
-    swapchain_create_info.imageColorSpace = SWAPCHAIN_COLOR_SPACE;
-    swapchain_create_info.imageExtent = { static_cast<uint32_t>(this->width), static_cast<uint32_t>(this->height) };
-    swapchain_create_info.imageArrayLayers = 1;
-    swapchain_create_info.imageUsage = SWAPCHAIN_IMAGE_USAGE;
-    swapchain_create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    swapchain_create_info.queueFamilyIndexCount = 1;
-    swapchain_create_info.pQueueFamilyIndices = &this->graphics_queue_family_index;
-    swapchain_create_info.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-    swapchain_create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    swapchain_create_info.presentMode = PRESENTATION_MODE;
-    swapchain_create_info.clipped = VK_TRUE;
-    swapchain_create_info.oldSwapchain = old_swapchain;
+    this->main_descr_manager.add_binding(0, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,           1, VK_SHADER_STAGE_VERTEX_BIT);
+    this->main_descr_manager.add_binding(0, 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,           1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    this->main_descr_manager.add_binding(0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,   2, VK_SHADER_STAGE_FRAGMENT_BIT);
+    this->main_descr_manager.add_binding(0, 3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,           1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    this->main_descr_manager.add_binding(0, 4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,           1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    this->main_descr_manager.add_binding(0, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,   1, VK_SHADER_STAGE_FRAGMENT_BIT);
 
-    VkResult result = vka::setup_swapchain(this->device, swapchain_create_info, this->swapchain, this->swapchain_views);
-    VULKAN_ASSERT(result);
+    VULKAN_ASSERT(this->main_descr_manager.init());
 
-    vkDestroySwapchainKHR(this->device, old_swapchain, nullptr);
+    VkDescriptorBufferInfo buffer_info[4];
+    buffer_info[0].buffer = this->tm_buffer.handle();
+    buffer_info[0].offset = 0;
+    buffer_info[0].range = sizeof(TransformMatrices);
+
+    buffer_info[1].buffer = this->directional_light_buffer.handle();
+    buffer_info[1].offset = 0;
+    buffer_info[1].range = ParticlesConstants::N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight);
+
+    buffer_info[2].buffer = this->material_buffer.handle();
+    buffer_info[2].offset = 0;
+    buffer_info[2].range = ParticlesConstants::N_MATERIALS * sizeof(Material);
+
+    buffer_info[3].buffer = this->fragment_variables_buffer.handle();
+    buffer_info[3].offset = 0;
+    buffer_info[3].range = sizeof(FragmentVariables);
+
+    VkDescriptorImageInfo image_info[3];
+#if DISPLAY_SHADOW_MAP
+    image_info[0].sampler = this->dir_shadow_sampler;
+    image_info[0].imageView = this->directional_shadow_map.view();
+    image_info[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+#else
+    image_info[0].sampler = this->floor_texture.sampler();
+    image_info[0].imageView = this->floor_texture.view();
+    image_info[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+#endif
+
+    image_info[1].sampler = this->fountain_texture.sampler();
+    image_info[1].imageView = this->fountain_texture.view();
+    image_info[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    // drectional shadow map
+    image_info[2].sampler = this->directional_shadow_map.sampler;
+    image_info[2].imageView = this->directional_shadow_map.depth_attachment.view();
+    image_info[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    this->main_descr_manager.add_buffer_info(0, 0, 0, 1, buffer_info + 0);
+    this->main_descr_manager.add_buffer_info(0, 2, 0, 1, buffer_info + 1);
+    this->main_descr_manager.add_buffer_info(0, 3, 0, 1, buffer_info + 2);
+    this->main_descr_manager.add_buffer_info(0, 4, 0, 1, buffer_info + 3);
+    this->main_descr_manager.add_image_info(0, 1, 0, 2, image_info + 0);
+    this->main_descr_manager.add_image_info(0, 5, 0, 1, image_info + 2);
+
+    this->main_descr_manager.update();
 }
 
-
-void ParticlesApp::create_depth_attachment(void)
+void ParticlesApp::init_dir_shadow_descriptor_manager(void)
 {
-    this->depth_attachment.set_image_format(DEPTH_FORMAT);
-    this->depth_attachment.set_image_extent({ static_cast<uint32_t>(this->width), static_cast<uint32_t>(this->height) });
-    this->depth_attachment.set_image_samples(VK_SAMPLE_COUNT_1_BIT);
-    this->depth_attachment.set_image_usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-    this->depth_attachment.set_image_queue_family_index(this->graphics_queue_family_index);
-    this->depth_attachment.set_view_format(DEPTH_FORMAT);
-    this->depth_attachment.set_view_components({});
-    this->depth_attachment.set_view_aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
-    this->depth_attachment.set_physical_device(this->physical_device);
-    this->depth_attachment.set_device(this->device);
-    VULKAN_ASSERT(this->depth_attachment.create());
+    this->dir_shadow_descr_manager.set_device(this->device);
+    this->dir_shadow_descr_manager.set_number_of_sets(1);
+
+    this->dir_shadow_descr_manager.add_binding(0, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
+    VULKAN_ASSERT(this->dir_shadow_descr_manager.init());
+
+    VkDescriptorBufferInfo descriptor_buffer_info = {};
+    descriptor_buffer_info.buffer = this->tm_buffer_dir_shadow.handle();
+    descriptor_buffer_info.offset = 0;
+    descriptor_buffer_info.range = sizeof(ShadowTransformMatrices);
+
+    this->dir_shadow_descr_manager.add_buffer_info(0, 0, 0, 1, &descriptor_buffer_info);
+    this->dir_shadow_descr_manager.update();
 }
 
-void ParticlesApp::create_render_pass(void)
-{
-    constexpr static size_t ATTACHMENT_COUNT = 2;
-
-    VkAttachmentDescription attachment_descr[ATTACHMENT_COUNT];
-    attachment_descr[0] = {};
-    attachment_descr[0].flags = 0;
-    attachment_descr[0].format = SWAPCHAIN_FORMAT;
-    attachment_descr[0].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachment_descr[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment_descr[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachment_descr[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachment_descr[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachment_descr[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachment_descr[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    attachment_descr[1] = {};
-    attachment_descr[1].flags = 0;
-    attachment_descr[1].format = DEPTH_FORMAT;
-    attachment_descr[1].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachment_descr[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment_descr[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachment_descr[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachment_descr[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachment_descr[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachment_descr[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference attachment_references[ATTACHMENT_COUNT];
-    attachment_references[0].attachment = 0;
-    attachment_references[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    attachment_references[1].attachment = 1;
-    attachment_references[1].layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass = {};
-    subpass.flags = 0;
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.inputAttachmentCount = 0;
-    subpass.pInputAttachments = nullptr;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = attachment_references + 0;
-    subpass.pResolveAttachments = nullptr;
-    subpass.pDepthStencilAttachment = attachment_references + 1;
-    subpass.preserveAttachmentCount = 0;
-    subpass.pPreserveAttachments = nullptr;
-
-    VkSubpassDependency subpass_dependency = {};
-    subpass_dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    subpass_dependency.dstSubpass = 0;
-    subpass_dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    subpass_dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    subpass_dependency.srcAccessMask = 0;
-    subpass_dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    subpass_dependency.dependencyFlags = 0;
-
-    VkRenderPassCreateInfo renderpass_create_info = {};
-    renderpass_create_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderpass_create_info.pNext = nullptr;
-    renderpass_create_info.flags = 0;
-    renderpass_create_info.attachmentCount = ATTACHMENT_COUNT;
-    renderpass_create_info.pAttachments = attachment_descr;
-    renderpass_create_info.subpassCount = 1;
-    renderpass_create_info.pSubpasses = &subpass;
-    renderpass_create_info.dependencyCount = 1;
-    renderpass_create_info.pDependencies = &subpass_dependency;
-
-    VULKAN_ASSERT(vkCreateRenderPass(this->device, &renderpass_create_info, nullptr, &this->renderpass_main));
-}
-
-
-void ParticlesApp::create_shadow_maps(void)
-{
-    this->directional_shadow_map.set_physical_device(this->physical_device);
-    this->directional_shadow_map.set_device(this->device);
-    this->directional_shadow_map.set_image_extent({ SHADOW_MAP_RESOLUTION, SHADOW_MAP_RESOLUTION });
-    this->directional_shadow_map.set_image_format(SHADOW_DEPTH_FORMAT);
-    this->directional_shadow_map.set_image_queue_family_index(this->graphics_queue_family_index);
-    this->directional_shadow_map.set_image_samples(VK_SAMPLE_COUNT_1_BIT);
-    this->directional_shadow_map.set_image_usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
-    this->directional_shadow_map.set_view_format(SHADOW_DEPTH_FORMAT);
-    this->directional_shadow_map.set_view_components({});
-    this->directional_shadow_map.set_view_aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT);
-    VULKAN_ASSERT(this->directional_shadow_map.create());
-
-    VkSamplerCreateInfo sampler_create_info = {};
-    sampler_create_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sampler_create_info.pNext = nullptr;
-    sampler_create_info.flags = 0;
-    sampler_create_info.magFilter = VK_FILTER_LINEAR;
-    sampler_create_info.minFilter = VK_FILTER_LINEAR;
-    sampler_create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sampler_create_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    sampler_create_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    sampler_create_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    sampler_create_info.mipLodBias = 0.0f;
-    sampler_create_info.anisotropyEnable = VK_FALSE;
-    sampler_create_info.maxAnisotropy = 1.0f;
-    sampler_create_info.compareEnable = VK_TRUE;
-    sampler_create_info.compareOp = VK_COMPARE_OP_LESS;
-    sampler_create_info.minLod = 0.0f;
-    sampler_create_info.maxLod = 0.0f;
-    sampler_create_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-    sampler_create_info.unnormalizedCoordinates = VK_FALSE;
-
-    VULKAN_ASSERT(vkCreateSampler(this->device, &sampler_create_info, nullptr, &this->dir_shadow_sampler));
-}
-
-void ParticlesApp::create_shadow_renderpasses(void)
-{
-    VkAttachmentDescription shadow_attachment = {};
-    shadow_attachment.flags = 0;
-    shadow_attachment.format = SHADOW_DEPTH_FORMAT;
-    shadow_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    shadow_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    shadow_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    shadow_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    shadow_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    shadow_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    shadow_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentReference shadow_attachment_reference;
-    shadow_attachment_reference.attachment = 0;
-    shadow_attachment_reference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription dir_shadow_subpass = {};
-    dir_shadow_subpass.flags = 0;
-    dir_shadow_subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    dir_shadow_subpass.inputAttachmentCount = 0;
-    dir_shadow_subpass.pInputAttachments = nullptr;
-    dir_shadow_subpass.colorAttachmentCount = 0;
-    dir_shadow_subpass.pColorAttachments = nullptr;
-    dir_shadow_subpass.pResolveAttachments = nullptr;
-    dir_shadow_subpass.pDepthStencilAttachment = &shadow_attachment_reference;
-    dir_shadow_subpass.preserveAttachmentCount = 0;
-    dir_shadow_subpass.pPreserveAttachments = nullptr;
-
-    VkSubpassDependency dir_shadow_dependency = {};
-    dir_shadow_dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dir_shadow_dependency.dstSubpass = 0;
-    dir_shadow_dependency.srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dir_shadow_dependency.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dir_shadow_dependency.srcAccessMask = 0;
-    dir_shadow_dependency.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dir_shadow_dependency.dependencyFlags = 0;
-
-    VkRenderPassCreateInfo dir_shadow_renderpass_create_info = {};
-    dir_shadow_renderpass_create_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    dir_shadow_renderpass_create_info.pNext = nullptr;
-    dir_shadow_renderpass_create_info.flags = 0;
-    dir_shadow_renderpass_create_info.attachmentCount = 1;
-    dir_shadow_renderpass_create_info.pAttachments = &shadow_attachment;
-    dir_shadow_renderpass_create_info.subpassCount = 1;
-    dir_shadow_renderpass_create_info.pSubpasses = &dir_shadow_subpass;
-    dir_shadow_renderpass_create_info.dependencyCount = 1;
-    dir_shadow_renderpass_create_info.pDependencies = &dir_shadow_dependency;
-
-    VULKAN_ASSERT(vkCreateRenderPass(this->device, &dir_shadow_renderpass_create_info, nullptr, &this->renderpass_dir_shadow));
-}
-
-
-void ParticlesApp::create_desciptor_set_layouts(void)
-{
-    // descriptor set layouts for main pipeline
-    VkDescriptorSetLayoutBinding bindings[7];
-    bindings[0] = {};
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    bindings[0].pImmutableSamplers = nullptr;
-
-    bindings[1] = {};
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[1].descriptorCount = 2;
-    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[1].pImmutableSamplers = nullptr;
-
-    bindings[2] = {};
-    bindings[2].binding = 2;
-    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[2].pImmutableSamplers = nullptr;
-
-    bindings[3] = {};
-    bindings[3].binding = 3;
-    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[3].descriptorCount = 1;
-    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[3].pImmutableSamplers = nullptr;
-
-    bindings[4] = {};
-    bindings[4].binding = 4;
-    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[4].descriptorCount = 1;
-    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[4].pImmutableSamplers = nullptr;
-
-    bindings[5] = {};
-    bindings[5].binding = 5;
-    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[5].descriptorCount = 1;
-    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[5].pImmutableSamplers = nullptr;
-
-    bindings[6] = {};
-    bindings[6].binding = 6;
-    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[6].descriptorCount = 1;
-    bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[6].pImmutableSamplers = nullptr;
-
-    VkDescriptorSetLayoutCreateInfo descr_layout_create_info = {};
-    descr_layout_create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    descr_layout_create_info.pNext = nullptr;
-    descr_layout_create_info.flags = 0;
-    descr_layout_create_info.bindingCount = 7;
-    descr_layout_create_info.pBindings = bindings;
-
-    VkDescriptorSetLayout layout;
-    VULKAN_ASSERT(vkCreateDescriptorSetLayout(this->device, &descr_layout_create_info, nullptr, &layout));
-    this->descriptor_set_layouts.push_back(layout);
-
-    // descriptor set layots for directional shadow map pipeline
-    VkDescriptorSetLayoutBinding bindings_dir_shadow[1];
-    bindings_dir_shadow[0] = {};
-    bindings_dir_shadow[0].binding = 0;
-    bindings_dir_shadow[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings_dir_shadow[0].descriptorCount = 1;
-    bindings_dir_shadow[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    bindings_dir_shadow[0].pImmutableSamplers = nullptr;
-
-    descr_layout_create_info.bindingCount = 1;
-    descr_layout_create_info.pBindings = bindings_dir_shadow;
-
-    VULKAN_ASSERT(vkCreateDescriptorSetLayout(this->device, &descr_layout_create_info, nullptr, &layout));
-    this->descriptor_set_layouts_dir_shadow.push_back(layout);
-}
 
 void ParticlesApp::get_vertex323_descriptions(std::vector<VkVertexInputBindingDescription>& bindings, std::vector<VkVertexInputAttributeDescription>& attributes)
 {
@@ -636,8 +423,8 @@ void ParticlesApp::get_vertex323_descriptions(std::vector<VkVertexInputBindingDe
 void ParticlesApp::create_pipeline(void)
 {
     vka::Shader vertex(this->device), fragment(this->device);
-    vertex.load(SHADER_STATIC_SCENE_VERTEX_PATH, VK_SHADER_STAGE_VERTEX_BIT);
-    fragment.load(SHADER_STATIC_SCENE_FRAGMENT_PATH, VK_SHADER_STAGE_FRAGMENT_BIT);
+    vertex.load(ParticlesConstants::SHADER_STATIC_SCENE_VERTEX_PATH, VK_SHADER_STAGE_VERTEX_BIT);
+    fragment.load(ParticlesConstants::SHADER_STATIC_SCENE_FRAGMENT_PATH, VK_SHADER_STAGE_FRAGMENT_BIT);
 
     vka::ShaderProgram shader;
     shader.attach(vertex);
@@ -762,8 +549,8 @@ void ParticlesApp::create_pipeline(void)
     pipeline_layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeline_layout_create_info.pNext = nullptr;
     pipeline_layout_create_info.flags = 0;
-    pipeline_layout_create_info.setLayoutCount = this->descriptor_set_layouts.size();
-    pipeline_layout_create_info.pSetLayouts = this->descriptor_set_layouts.data();
+    pipeline_layout_create_info.setLayoutCount = this->main_descr_manager.get_layouts().size();
+    pipeline_layout_create_info.pSetLayouts = this->main_descr_manager.get_layouts().data();
     pipeline_layout_create_info.pushConstantRangeCount = 0;
     pipeline_layout_create_info.pPushConstantRanges = nullptr;
 
@@ -785,7 +572,7 @@ void ParticlesApp::create_pipeline(void)
     pipeline_create_info.pColorBlendState = &color_blend_create_info;
     pipeline_create_info.pDynamicState = &dynamic_state_create_info;
     pipeline_create_info.layout = this->pipeline_layout;
-    pipeline_create_info.renderPass = this->renderpass_main;
+    pipeline_create_info.renderPass = this->onscreen_renderpass.render_pass;
     pipeline_create_info.subpass = 0;
     pipeline_create_info.basePipelineHandle = VK_NULL_HANDLE;
     pipeline_create_info.basePipelineIndex = -1;
@@ -796,7 +583,7 @@ void ParticlesApp::create_pipeline(void)
 void ParticlesApp::create_shadow_pipelines(void)
 {
     vka::Shader dir_shadow_vert(this->device);
-    dir_shadow_vert.load(DIRECTIONAL_SHADOW_VERTEX_PATH, VK_SHADER_STAGE_VERTEX_BIT);
+    dir_shadow_vert.load(ParticlesConstants::DIRECTIONAL_SHADOW_VERTEX_PATH, VK_SHADER_STAGE_VERTEX_BIT);
     vka::ShaderProgram dir_shadow_program;
     dir_shadow_program.attach(dir_shadow_vert);
 
@@ -823,14 +610,14 @@ void ParticlesApp::create_shadow_pipelines(void)
     VkViewport dir_shadow_vp = {};
     dir_shadow_vp.x = 0;
     dir_shadow_vp.y = 0;
-    dir_shadow_vp.width = SHADOW_MAP_RESOLUTION;
-    dir_shadow_vp.height = SHADOW_MAP_RESOLUTION;
+    dir_shadow_vp.width = ParticlesConstants::SHADOW_MAP_RESOLUTION;
+    dir_shadow_vp.height = ParticlesConstants::SHADOW_MAP_RESOLUTION;
     dir_shadow_vp.minDepth = 0.0f;
     dir_shadow_vp.maxDepth = 1.0f;
 
     VkRect2D dir_shadow_scissor = {};
     dir_shadow_scissor.offset = { 0, 0 };
-    dir_shadow_scissor.extent = { SHADOW_MAP_RESOLUTION, SHADOW_MAP_RESOLUTION };
+    dir_shadow_scissor.extent = { ParticlesConstants::SHADOW_MAP_RESOLUTION, ParticlesConstants::SHADOW_MAP_RESOLUTION };
 
     VkPipelineViewportStateCreateInfo dir_shadow_vp_state = {};
     dir_shadow_vp_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -898,8 +685,8 @@ void ParticlesApp::create_shadow_pipelines(void)
     dir_shadow_layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     dir_shadow_layout.pNext = nullptr;
     dir_shadow_layout.flags = 0;
-    dir_shadow_layout.setLayoutCount = this->descriptor_set_layouts_dir_shadow.size();
-    dir_shadow_layout.pSetLayouts = this->descriptor_set_layouts_dir_shadow.data();
+    dir_shadow_layout.setLayoutCount = this->dir_shadow_descr_manager.get_layouts().size();
+    dir_shadow_layout.pSetLayouts = this->dir_shadow_descr_manager.get_layouts().data();
     dir_shadow_layout.pushConstantRangeCount = 0;
     dir_shadow_layout.pPushConstantRanges = nullptr;
 
@@ -921,7 +708,7 @@ void ParticlesApp::create_shadow_pipelines(void)
     dir_shadow_pipeline.pColorBlendState = nullptr;
     dir_shadow_pipeline.pDynamicState = &dynamic_state_create_info;
     dir_shadow_pipeline.layout = this->pipeline_layout_dir_shadow;
-    dir_shadow_pipeline.renderPass = this->renderpass_dir_shadow;
+    dir_shadow_pipeline.renderPass = this->directional_shadow_map.render_pass;
     dir_shadow_pipeline.subpass = 0;
     dir_shadow_pipeline.basePipelineHandle = VK_NULL_HANDLE;
     dir_shadow_pipeline.basePipelineIndex = -1;
@@ -929,50 +716,6 @@ void ParticlesApp::create_shadow_pipelines(void)
     VULKAN_ASSERT(vkCreateGraphicsPipelines(this->device, VK_NULL_HANDLE, 1, &dir_shadow_pipeline, nullptr, &this->pipeline_dir_shadow));
 }
 
-
-void ParticlesApp::create_framebuffers(void)
-{
-    for (size_t i = 0; i < this->swapchain_views.size(); i++)
-    {
-        std::vector<VkImageView> attachments = {
-            this->swapchain_views[i],
-            this->depth_attachment.view()
-        };
-
-        VkFramebufferCreateInfo fbo_create_info = {};
-        fbo_create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fbo_create_info.pNext = nullptr;
-        fbo_create_info.flags = 0;
-        fbo_create_info.renderPass = this->renderpass_main;
-        fbo_create_info.attachmentCount = attachments.size();
-        fbo_create_info.pAttachments = attachments.data();
-        fbo_create_info.width = static_cast<uint32_t>(this->width);
-        fbo_create_info.height = static_cast<uint32_t>(this->height);
-        fbo_create_info.layers = 1;
-
-        VkFramebuffer fbo;
-        VULKAN_ASSERT(vkCreateFramebuffer(this->device, &fbo_create_info, nullptr, &fbo));
-        this->swapchain_fbos.push_back(fbo);
-    }
-}
-
-void ParticlesApp::create_shadow_framebuffers(void)
-{
-    VkImageView fbo_dir_shadow_attachment = this->directional_shadow_map.view();
-
-    VkFramebufferCreateInfo dir_shadow_fbo_create_info = {};
-    dir_shadow_fbo_create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    dir_shadow_fbo_create_info.pNext = nullptr;
-    dir_shadow_fbo_create_info.flags = 0;
-    dir_shadow_fbo_create_info.renderPass = this->renderpass_dir_shadow;
-    dir_shadow_fbo_create_info.attachmentCount = 1;
-    dir_shadow_fbo_create_info.pAttachments = &fbo_dir_shadow_attachment;
-    dir_shadow_fbo_create_info.width = SHADOW_MAP_RESOLUTION;
-    dir_shadow_fbo_create_info.height = SHADOW_MAP_RESOLUTION;
-    dir_shadow_fbo_create_info.layers = 1;
-
-    VULKAN_ASSERT(vkCreateFramebuffer(this->device, &dir_shadow_fbo_create_info, nullptr, &this->fbo_dir_shadow));
-}
 
 void ParticlesApp::create_command_pool(void)
 {
@@ -987,7 +730,7 @@ void ParticlesApp::create_command_pool(void)
 
 void ParticlesApp::create_command_buffers(void)
 {
-    this->primary_command_buffers.resize(SWAPCHAIN_IMAGES);
+    this->primary_command_buffers.resize(ParticlesConstants::SWAPCHAIN_IMAGES);
 
     VkCommandBufferAllocateInfo command_buffer_alloc_info = {};
     command_buffer_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1125,13 +868,13 @@ void ParticlesApp::create_uniform_buffers(void)
     this->directional_light_buffer.set_create_flags(0);
     this->directional_light_buffer.set_create_queue_families(&this->graphics_queue_family_index, 1);
     this->directional_light_buffer.set_create_sharing_mode(VK_SHARING_MODE_EXCLUSIVE);
-    this->directional_light_buffer.set_create_size(N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight));
+    this->directional_light_buffer.set_create_size(ParticlesConstants::N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight));
     this->directional_light_buffer.set_create_usage(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     this->directional_light_buffer.set_memory_properties(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
     this->directional_light_buffer.create();
 
-    map = this->directional_light_buffer.map(N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight), 0);
-    memset(map, 0, N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight));
+    map = this->directional_light_buffer.map(ParticlesConstants::N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight), 0);
+    memset(map, 0, ParticlesConstants::N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight));
     this->directional_light_buffer.unmap();
 
     // buffer for materials (main pipeline)
@@ -1140,13 +883,13 @@ void ParticlesApp::create_uniform_buffers(void)
     this->material_buffer.set_create_flags(0);
     this->material_buffer.set_create_queue_families(&this->graphics_queue_family_index, 1);
     this->material_buffer.set_create_sharing_mode(VK_SHARING_MODE_EXCLUSIVE);
-    this->material_buffer.set_create_size(N_MATERIALS * sizeof(Material));
+    this->material_buffer.set_create_size(ParticlesConstants::N_MATERIALS * sizeof(Material));
     this->material_buffer.set_create_usage(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     this->material_buffer.set_memory_properties(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
     this->material_buffer.create();
 
-    map = this->material_buffer.map(N_MATERIALS * sizeof(Material), 0);
-    memset(map, 0, N_MATERIALS * sizeof(Material));
+    map = this->material_buffer.map(ParticlesConstants::N_MATERIALS * sizeof(Material), 0);
+    memset(map, 0, ParticlesConstants::N_MATERIALS * sizeof(Material));
     this->material_buffer.unmap();
 
     // buffer for additional values for the fragment shader (main pipeline)
@@ -1182,7 +925,7 @@ void ParticlesApp::create_textures(void)
 
     // floor texture
     int w, h, c;
-    uint8_t* data = stbi_load(TEXTURE_FLOOR, &w, &h, &c, 4);
+    uint8_t* data = stbi_load(ParticlesConstants::TEXTURE_FLOOR, &w, &h, &c, 4);
     if (data == nullptr)
         std::runtime_error("Failed to load floor texture!");
     size_t px_stride = 4 * sizeof(uint8_t);
@@ -1230,7 +973,7 @@ void ParticlesApp::create_textures(void)
     stbi_image_free(data);
 
     // fountain texture
-    data = stbi_load(TEXTURE_FOUNTAIN, &w, &h, &c, 4);
+    data = stbi_load(ParticlesConstants::TEXTURE_FOUNTAIN, &w, &h, &c, 4);
     if (data == nullptr)
         std::runtime_error("Failed to load fountain texture!");
     px_stride = 4 * sizeof(uint8_t);
@@ -1272,265 +1015,6 @@ void ParticlesApp::create_textures(void)
 
     VULKAN_ASSERT(this->fountain_texture.create(data, px_stride));
     stbi_image_free(data);
-
-    // jitter map
-    srr.levelCount = 1;
-
-    // generate jitter map
-    const size_t jitter_buffer_size = this->vmode->width * this->vmode->height * SHADOW_MAP_SAMPLES_DIV_2 * 4;
-    uint8_t* jitter_buff = new uint8_t[jitter_buffer_size];
-
-    for (size_t i = 0; i < jitter_buffer_size; i++)
-    {
-        jitter_buff[i] = static_cast<uint8_t>(uniform_real_dist(0.0f, 255.0f));
-    }
-
-    this->jitter_map.set_image_flags(0);
-    this->jitter_map.set_image_type(VK_IMAGE_TYPE_3D);
-    this->jitter_map.set_image_extent({ static_cast<uint32_t>(this->vmode->width), static_cast<uint32_t>(this->vmode->height), SHADOW_MAP_SAMPLES_DIV_2 });
-    this->jitter_map.set_image_array_layers(1);
-    this->jitter_map.set_image_format(VK_FORMAT_R8G8B8A8_UNORM);
-    this->jitter_map.set_image_queue_families(this->graphics_queue_family_index);
-
-    this->jitter_map.set_view_components({});
-    this->jitter_map.set_view_format(VK_FORMAT_R8G8B8A8_UNORM);
-    this->jitter_map.set_view_type(VK_IMAGE_VIEW_TYPE_3D);
-    this->jitter_map.set_view_subresource_range(srr);
-
-    this->jitter_map.set_sampler_address_mode(VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
-    this->jitter_map.set_sampler_anisotropy_enable(false);
-    this->jitter_map.set_sampler_max_anisotropy(0);
-    this->jitter_map.set_sampler_border_color(VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK);
-    this->jitter_map.set_sampler_compare_enable(false);
-    this->jitter_map.set_sampler_compare_op(VK_COMPARE_OP_NEVER);
-    this->jitter_map.set_sampler_lod(0.0f, 0.0f);
-    this->jitter_map.set_sampler_mip_lod_bias(0.0f);
-    this->jitter_map.set_sampler_mag_filter(VK_FILTER_NEAREST);
-    this->jitter_map.set_sampler_min_filter(VK_FILTER_NEAREST);
-    this->jitter_map.set_sampler_mipmap_mode(VK_SAMPLER_MIPMAP_MODE_NEAREST);
-    this->jitter_map.set_sampler_unnormalized_coordinates(false);
-
-    this->jitter_map.set_pyhsical_device(this->physical_device);
-    this->jitter_map.set_device(this->device);
-    this->jitter_map.set_command_pool(this->command_pool);
-    this->jitter_map.set_queue(this->graphics_queue);
-
-    VULKAN_ASSERT(this->jitter_map.create(jitter_buff, 4 * sizeof(uint8_t)));
-    delete[] jitter_buff;
-}
-
-
-void ParticlesApp::create_desciptor_pools(void)
-{
-    // descriptor pool for main pipeline
-    VkDescriptorPoolSize pool_sizes[2];
-    pool_sizes[0] = {};
-    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    pool_sizes[0].descriptorCount = 4;
-
-    pool_sizes[1] = {};
-    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[1].descriptorCount = 4;
-
-    VkDescriptorPoolCreateInfo descr_pool_create_info = {};
-    descr_pool_create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    descr_pool_create_info.pNext = nullptr;
-    descr_pool_create_info.flags = 0;
-    descr_pool_create_info.maxSets = this->descriptor_set_layouts.size();
-    descr_pool_create_info.poolSizeCount = 2;
-    descr_pool_create_info.pPoolSizes = pool_sizes;
-
-    VULKAN_ASSERT(vkCreateDescriptorPool(this->device, &descr_pool_create_info, nullptr, &this->descriptor_pool));
-
-    // descriptor pool for directional shadow map pipeline
-    VkDescriptorPoolSize pool_sizes_dir_shadow[1];
-    pool_sizes_dir_shadow[0] = {};
-    pool_sizes_dir_shadow[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    pool_sizes_dir_shadow[0].descriptorCount = 1;
-
-    descr_pool_create_info.maxSets = this->descriptor_set_layouts_dir_shadow.size();
-    descr_pool_create_info.poolSizeCount = 1;
-    descr_pool_create_info.pPoolSizes = pool_sizes_dir_shadow;
-
-    VULKAN_ASSERT(vkCreateDescriptorPool(this->device, &descr_pool_create_info, nullptr, &this->descriptor_pool_dir_shadow));
-}
-
-void ParticlesApp::create_descriptor_sets(void)
-{
-    VkDescriptorSetAllocateInfo descr_set_alloc_info = {};
-    descr_set_alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    descr_set_alloc_info.pNext = nullptr;
-    descr_set_alloc_info.descriptorPool = this->descriptor_pool;
-    descr_set_alloc_info.descriptorSetCount = this->descriptor_set_layouts.size();
-    descr_set_alloc_info.pSetLayouts = this->descriptor_set_layouts.data();
-
-    this->descriptor_sets.resize(this->descriptor_set_layouts.size());
-    VULKAN_ASSERT(vkAllocateDescriptorSets(this->device, &descr_set_alloc_info, this->descriptor_sets.data()));
-
-    VkDescriptorBufferInfo buffer_info[4];
-    buffer_info[0].buffer = this->tm_buffer.handle();
-    buffer_info[0].offset = 0;
-    buffer_info[0].range = sizeof(TransformMatrices);
-
-    buffer_info[1].buffer = this->directional_light_buffer.handle();
-    buffer_info[1].offset = 0;
-    buffer_info[1].range = N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight);
-
-    buffer_info[2].buffer = this->material_buffer.handle();
-    buffer_info[2].offset = 0;
-    buffer_info[2].range = N_MATERIALS * sizeof(Material);
-
-    buffer_info[3].buffer = this->fragment_variables_buffer.handle();
-    buffer_info[3].offset = 0;
-    buffer_info[3].range = sizeof(FragmentVariables);
-
-    VkDescriptorImageInfo image_info[4];
-    image_info[0] = {};
-#if DISPLAY_SHADOW_MAP
-    image_info[0].sampler = this->dir_shadow_sampler;
-    image_info[0].imageView = this->directional_shadow_map.view();
-#else
-    image_info[0].sampler = this->floor_texture.sampler();
-    image_info[0].imageView = this->floor_texture.view();
-#endif
-    image_info[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    image_info[1] = {};
-    image_info[1].sampler = this->fountain_texture.sampler();
-    image_info[1].imageView = this->fountain_texture.view();
-    image_info[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    // drectional shadow map
-    image_info[2] = {};
-    image_info[2].sampler = this->dir_shadow_sampler;
-    image_info[2].imageView = this->directional_shadow_map.view();
-    image_info[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    // jitter map
-    image_info[3] = {};
-    image_info[3].sampler = this->jitter_map.sampler();
-    image_info[3].imageView = this->jitter_map.view();
-    image_info[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkWriteDescriptorSet write_sets[7];
-    write_sets[0] = {};
-    write_sets[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write_sets[0].pNext = nullptr;
-    write_sets[0].dstSet = this->descriptor_sets.at(0);
-    write_sets[0].dstBinding = 0;
-    write_sets[0].dstArrayElement = 0;
-    write_sets[0].descriptorCount = 1;
-    write_sets[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    write_sets[0].pImageInfo = nullptr;
-    write_sets[0].pBufferInfo = buffer_info + 0;
-    write_sets[0].pTexelBufferView = nullptr;
-
-    write_sets[1] = {};
-    write_sets[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write_sets[1].pNext = nullptr;
-    write_sets[1].dstSet = this->descriptor_sets.at(0);
-    write_sets[1].dstBinding = 1;
-    write_sets[1].dstArrayElement = 0;
-    write_sets[1].descriptorCount = 2;
-    write_sets[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write_sets[1].pImageInfo = image_info + 0;
-    write_sets[1].pBufferInfo = nullptr;
-    write_sets[1].pTexelBufferView = nullptr;
-
-    write_sets[2] = {};
-    write_sets[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write_sets[2].pNext = nullptr;
-    write_sets[2].dstSet = this->descriptor_sets.at(0);
-    write_sets[2].dstBinding = 2;
-    write_sets[2].dstArrayElement = 0;
-    write_sets[2].descriptorCount = 1;
-    write_sets[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    write_sets[2].pImageInfo = nullptr;
-    write_sets[2].pBufferInfo = buffer_info + 1;
-    write_sets[2].pTexelBufferView = nullptr;
-
-    write_sets[3] = {};
-    write_sets[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write_sets[3].pNext = nullptr;
-    write_sets[3].dstSet = this->descriptor_sets.at(0);
-    write_sets[3].dstBinding = 3;
-    write_sets[3].dstArrayElement = 0;
-    write_sets[3].descriptorCount = 1;
-    write_sets[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    write_sets[3].pImageInfo = nullptr;
-    write_sets[3].pBufferInfo = buffer_info + 2;
-    write_sets[3].pTexelBufferView = nullptr;
-
-    write_sets[4] = {};
-    write_sets[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write_sets[4].pNext = nullptr;
-    write_sets[4].dstSet = this->descriptor_sets.at(0);
-    write_sets[4].dstBinding = 4;
-    write_sets[4].dstArrayElement = 0;
-    write_sets[4].descriptorCount = 1;
-    write_sets[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    write_sets[4].pImageInfo = nullptr;
-    write_sets[4].pBufferInfo = buffer_info + 3;
-    write_sets[4].pTexelBufferView = nullptr;
-
-    write_sets[5] = {};
-    write_sets[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write_sets[5].pNext = nullptr;
-    write_sets[5].dstSet = this->descriptor_sets.at(0);
-    write_sets[5].dstBinding = 5;
-    write_sets[5].dstArrayElement = 0;
-    write_sets[5].descriptorCount = 1;
-    write_sets[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write_sets[5].pImageInfo = image_info + 2;
-    write_sets[5].pBufferInfo = nullptr;
-    write_sets[5].pTexelBufferView = nullptr;
-
-    write_sets[6] = {};
-    write_sets[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write_sets[6].pNext = nullptr;
-    write_sets[6].dstSet = this->descriptor_sets.at(0);
-    write_sets[6].dstBinding = 6;
-    write_sets[6].dstArrayElement = 0;
-    write_sets[6].descriptorCount = 1;
-    write_sets[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write_sets[6].pImageInfo = image_info + 3;
-    write_sets[6].pBufferInfo = nullptr;
-    write_sets[6].pTexelBufferView = nullptr;
-
-    vkUpdateDescriptorSets(this->device, 7, write_sets, 0, nullptr);
-}
-
-void ParticlesApp::create_descriptor_sets_dir_shadow(void)
-{
-    VkDescriptorSetAllocateInfo descr_set_alloc_info = {};
-    descr_set_alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    descr_set_alloc_info.pNext = nullptr;
-    descr_set_alloc_info.descriptorPool = this->descriptor_pool_dir_shadow;
-    descr_set_alloc_info.descriptorSetCount = this->descriptor_set_layouts_dir_shadow.size();
-    descr_set_alloc_info.pSetLayouts = this->descriptor_set_layouts_dir_shadow.data();
-
-    this->descriptor_sets_dir_shadow.resize(this->descriptor_set_layouts_dir_shadow.size());
-    VULKAN_ASSERT(vkAllocateDescriptorSets(this->device, &descr_set_alloc_info, this->descriptor_sets_dir_shadow.data()));
-
-    VkDescriptorBufferInfo descriptor_buffer_info = {};
-    descriptor_buffer_info.buffer = this->tm_buffer_dir_shadow.handle();
-    descriptor_buffer_info.offset = 0;
-    descriptor_buffer_info.range = sizeof(ShadowTransformMatrices);
-
-    VkWriteDescriptorSet descriptor_set_writes[1] = {};
-    descriptor_set_writes[0] = {};
-    descriptor_set_writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptor_set_writes[0].pNext = nullptr;
-    descriptor_set_writes[0].dstSet = this->descriptor_sets_dir_shadow.at(0);
-    descriptor_set_writes[0].dstBinding = 0;
-    descriptor_set_writes[0].dstArrayElement = 0;
-    descriptor_set_writes[0].descriptorCount = 1;
-    descriptor_set_writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    descriptor_set_writes[0].pImageInfo = nullptr;
-    descriptor_set_writes[0].pBufferInfo = &descriptor_buffer_info;
-    descriptor_set_writes[0].pTexelBufferView = nullptr;
-
-    vkUpdateDescriptorSets(this->device, 1, descriptor_set_writes, 0, nullptr);
 }
 
 
@@ -1558,9 +1042,9 @@ void ParticlesApp::init_particles(void)
     constexpr static size_t n_particles = 1000;
 
     vka::Shader particle_vert(this->device), particle_geom(this->device), particle_frag(this->device);
-    particle_vert.load(PARTICLE_VERTEX_PATH, VK_SHADER_STAGE_VERTEX_BIT);
-    particle_geom.load(PARTICLE_GEOMETRY_PATH, VK_SHADER_STAGE_GEOMETRY_BIT);
-    particle_frag.load(PARTICLE_FRAGMENT_PATH, VK_SHADER_STAGE_FRAGMENT_BIT);
+    particle_vert.load(ParticlesConstants::PARTICLE_VERTEX_PATH, VK_SHADER_STAGE_VERTEX_BIT);
+    particle_geom.load(ParticlesConstants::PARTICLE_GEOMETRY_PATH, VK_SHADER_STAGE_GEOMETRY_BIT);
+    particle_frag.load(ParticlesConstants::PARTICLE_FRAGMENT_PATH, VK_SHADER_STAGE_FRAGMENT_BIT);
 
     vka::ShaderProgram program;
     program.attach(particle_vert);
@@ -1570,12 +1054,12 @@ void ParticlesApp::init_particles(void)
     ParticleRenderer::Config particle_config = {};
     particle_config.physical_device = this->physical_device;
     particle_config.device = this->device;
-    particle_config.render_pass = this->renderpass_main;
+    particle_config.render_pass = this->onscreen_renderpass.render_pass;
     particle_config.subpass = 0;
     particle_config.family_index = this->graphics_queue_family_index;
     particle_config.graphics_queue = this->graphics_queue;
     particle_config.p_program = &program;
-    particle_config.texture_path = TEXTURE_PARTICLE;
+    particle_config.texture_path = ParticlesConstants::TEXTURE_PARTICLE;
     particle_config.scr_width = this->width;
     particle_config.scr_height = this->height;
     particle_config.max_particles = n_particles;
@@ -1628,14 +1112,14 @@ void ParticlesApp::record_primary_commands(void)
     command_begin_info.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
     command_begin_info.pInheritanceInfo = nullptr;
 
-    for (size_t i = 0; i < this->swapchain_views.size(); i++)
+    for (size_t i = 0; i < this->onscreen_renderpass.views.size(); i++)
     {
         VULKAN_ASSERT(vkBeginCommandBuffer(this->primary_command_buffers[i], &command_begin_info));
 
         // draw directional shadow map
         VkRect2D dir_shadow_render_area = {};
         dir_shadow_render_area.offset = { 0, 0 };
-        dir_shadow_render_area.extent = { SHADOW_MAP_RESOLUTION, SHADOW_MAP_RESOLUTION };
+        dir_shadow_render_area.extent = { ParticlesConstants::SHADOW_MAP_RESOLUTION, ParticlesConstants::SHADOW_MAP_RESOLUTION };
 
         VkClearValue dir_shadow_clear_value = {};
         dir_shadow_clear_value.depthStencil.depth = 1.0f;
@@ -1643,8 +1127,8 @@ void ParticlesApp::record_primary_commands(void)
         VkRenderPassBeginInfo dir_shadow_render_pass_begin_info = {};
         dir_shadow_render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         dir_shadow_render_pass_begin_info.pNext = nullptr;
-        dir_shadow_render_pass_begin_info.renderPass = this->renderpass_dir_shadow;
-        dir_shadow_render_pass_begin_info.framebuffer = this->fbo_dir_shadow;
+        dir_shadow_render_pass_begin_info.renderPass = this->directional_shadow_map.render_pass;
+        dir_shadow_render_pass_begin_info.framebuffer = this->directional_shadow_map.fbo;
         dir_shadow_render_pass_begin_info.renderArea = dir_shadow_render_area;
         dir_shadow_render_pass_begin_info.clearValueCount = 1;
         dir_shadow_render_pass_begin_info.pClearValues = &dir_shadow_clear_value;
@@ -1667,8 +1151,8 @@ void ParticlesApp::record_primary_commands(void)
         VkRenderPassBeginInfo render_pass_begin_info = {};
         render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         render_pass_begin_info.pNext = nullptr;
-        render_pass_begin_info.renderPass = this->renderpass_main;
-        render_pass_begin_info.framebuffer = this->swapchain_fbos[i];
+        render_pass_begin_info.renderPass = this->onscreen_renderpass.render_pass;
+        render_pass_begin_info.framebuffer = this->onscreen_renderpass.fbos[i];
         render_pass_begin_info.renderArea = render_area;
         render_pass_begin_info.clearValueCount = 2;
         render_pass_begin_info.pClearValues = clear_values;
@@ -1689,7 +1173,7 @@ void ParticlesApp::record_static_scene(void)
     VkCommandBufferInheritanceInfo inheritance_info = {};
     inheritance_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
     inheritance_info.pNext = nullptr;
-    inheritance_info.renderPass = this->renderpass_main;
+    inheritance_info.renderPass = this->onscreen_renderpass.render_pass;
     inheritance_info.subpass = 0;
     inheritance_info.framebuffer = VK_NULL_HANDLE;
     inheritance_info.occlusionQueryEnable = VK_FALSE;
@@ -1725,7 +1209,7 @@ void ParticlesApp::record_static_scene(void)
     VkDeviceSize offsets[2] = { 0, 0 };
     vkCmdBindVertexBuffers(this->static_scene_command_buffer, 0, 1, buffers + 0, offsets + 0);
     vkCmdBindIndexBuffer(this->static_scene_command_buffer, this->floor_index_buffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-    vkCmdBindDescriptorSets(this->static_scene_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, this->pipeline_layout, 0, 1, this->descriptor_sets.data(), 0, nullptr);
+    vkCmdBindDescriptorSets(this->static_scene_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, this->pipeline_layout, 0, this->main_descr_manager.get_sets().size(), this->main_descr_manager.get_sets().data(), 0, nullptr);
 
     vkCmdDrawIndexed(this->static_scene_command_buffer, this->floor_indices.size(), 1, 0, 0, 0);
 
@@ -1745,9 +1229,9 @@ void ParticlesApp::record_dir_shadow_map(void)
     VkCommandBufferInheritanceInfo inheritance_info = {};
     inheritance_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
     inheritance_info.pNext = nullptr;
-    inheritance_info.renderPass = this->renderpass_dir_shadow;
+    inheritance_info.renderPass = this->directional_shadow_map.render_pass;
     inheritance_info.subpass = 0;
-    inheritance_info.framebuffer = this->fbo_dir_shadow;
+    inheritance_info.framebuffer = this->directional_shadow_map.fbo;
     inheritance_info.occlusionQueryEnable = VK_FALSE;
     inheritance_info.queryFlags = 0;
     inheritance_info.pipelineStatistics = 0;
@@ -1763,14 +1247,14 @@ void ParticlesApp::record_dir_shadow_map(void)
     VkViewport viewport = {};
     viewport.x = 0.0f;
     viewport.y = 0.0f;
-    viewport.width = SHADOW_MAP_RESOLUTION;
-    viewport.height = SHADOW_MAP_RESOLUTION;
+    viewport.width = ParticlesConstants::SHADOW_MAP_RESOLUTION;
+    viewport.height = ParticlesConstants::SHADOW_MAP_RESOLUTION;
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
 
     VkRect2D scissor = {};
     scissor.offset = { 0, 0 };
-    scissor.extent = { SHADOW_MAP_RESOLUTION, SHADOW_MAP_RESOLUTION };
+    scissor.extent = { ParticlesConstants::SHADOW_MAP_RESOLUTION, ParticlesConstants::SHADOW_MAP_RESOLUTION };
 
     float min_depth_bias = 200.0f;
     float max_depth_bias = 200.0f;
@@ -1786,7 +1270,7 @@ void ParticlesApp::record_dir_shadow_map(void)
     VkDeviceSize offsets[2] = { 0, 0 };
     vkCmdBindVertexBuffers(this->dir_shadow_command_buffer, 0, 1, buffers + 0, offsets + 0);
     vkCmdBindIndexBuffer(this->dir_shadow_command_buffer, this->floor_index_buffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-    vkCmdBindDescriptorSets(this->dir_shadow_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, this->pipeline_layout_dir_shadow, 0, 1, this->descriptor_sets_dir_shadow.data(), 0, nullptr);
+    vkCmdBindDescriptorSets(this->dir_shadow_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, this->pipeline_layout_dir_shadow, 0, this->dir_shadow_descr_manager.get_sets().size(), this->dir_shadow_descr_manager.get_sets().data(), 0, nullptr);
 
 #if !DISPLAY_SHADOW_MAP
     vkCmdDrawIndexed(this->dir_shadow_command_buffer, this->floor_indices.size(), 1, 0, 0, 0);
@@ -1805,7 +1289,7 @@ void ParticlesApp::record_dir_shadow_map(void)
 void ParticlesApp::draw_frame(void)
 {
     uint32_t img_index;
-    VULKAN_ASSERT(vkAcquireNextImageKHR(this->device, this->swapchain, ~(0UI64), this->image_ready, VK_NULL_HANDLE, &img_index));
+    VULKAN_ASSERT(vkAcquireNextImageKHR(this->device, this->onscreen_renderpass.swapchain, ~(0UI64), this->image_ready, VK_NULL_HANDLE, &img_index));
 
     VkPipelineStageFlags stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo static_scene_submit_info = {};
@@ -1830,7 +1314,7 @@ void ParticlesApp::draw_frame(void)
     present_info.waitSemaphoreCount = 1;
     present_info.pWaitSemaphores = &this->rendering_done;
     present_info.swapchainCount = 1;
-    present_info.pSwapchains = &this->swapchain;
+    present_info.pSwapchains = &this->onscreen_renderpass.swapchain;
     present_info.pImageIndices = &img_index;
     present_info.pResults = nullptr;
 
@@ -1848,12 +1332,13 @@ void ParticlesApp::destroy_vulkan(void)
     vkDestroySemaphore(this->device, this->image_ready, nullptr);
     vkDestroySemaphore(this->device, this->rendering_done, nullptr);
 
-    for (VkDescriptorSetLayout layout : this->descriptor_set_layouts)
-        vkDestroyDescriptorSetLayout(this->device, layout, nullptr);
-    vkDestroyDescriptorPool(this->device, this->descriptor_pool, nullptr);
-    for (VkDescriptorSetLayout layout : this->descriptor_set_layouts_dir_shadow)
-        vkDestroyDescriptorSetLayout(this->device, layout, nullptr);
-    vkDestroyDescriptorPool(this->device, this->descriptor_pool_dir_shadow, nullptr);
+    vkDestroyPipeline(this->device, this->pipeline, nullptr);
+    vkDestroyPipelineLayout(this->device, this->pipeline_layout, nullptr);
+    vkDestroyPipeline(this->device, this->pipeline_dir_shadow, nullptr);
+    vkDestroyPipelineLayout(this->device, this->pipeline_layout_dir_shadow, nullptr);
+
+    this->main_descr_manager.clear();
+    this->dir_shadow_descr_manager.clear();
 
     this->floor_texture.clear();
     this->floor_vertex_buffer.clear();
@@ -1866,33 +1351,14 @@ void ParticlesApp::destroy_vulkan(void)
     this->directional_light_buffer.clear();
     this->material_buffer.clear();
     this->fragment_variables_buffer.clear();
-    this->jitter_map.clear();
-    
-    vkDestroySampler(this->device, this->dir_shadow_sampler, nullptr);
 
     vkFreeCommandBuffers(this->device, this->command_pool, this->primary_command_buffers.size(), this->primary_command_buffers.data());
     vkFreeCommandBuffers(this->device, this->command_pool, 1, &this->static_scene_command_buffer);
     vkFreeCommandBuffers(this->device, this->command_pool, 1, &this->dir_shadow_command_buffer);
     vkDestroyCommandPool(this->device, this->command_pool, nullptr);
 
-    for (VkFramebuffer fbo : this->swapchain_fbos)
-        vkDestroyFramebuffer(this->device, fbo, nullptr);
-    vkDestroyFramebuffer(this->device, fbo_dir_shadow, nullptr);
-
-    vkDestroyPipeline(this->device, this->pipeline, nullptr);
-    vkDestroyPipelineLayout(this->device, this->pipeline_layout, nullptr);
-    vkDestroyPipeline(this->device, this->pipeline_dir_shadow, nullptr);
-    vkDestroyPipelineLayout(this->device, this->pipeline_layout_dir_shadow, nullptr);
-
-    vkDestroyRenderPass(this->device, this->renderpass_main, nullptr);
-    this->depth_attachment.clear();
-
-    vkDestroyRenderPass(this->device, this->renderpass_dir_shadow, nullptr);
-    this->directional_shadow_map.clear();
-
-    for (VkImageView view : this->swapchain_views)
-        vkDestroyImageView(this->device, view, nullptr);
-    vkDestroySwapchainKHR(this->device, this->swapchain, nullptr);
+    this->directional_shadow_map.clear(this->device);
+    this->onscreen_renderpass.clear(this->device);
 
     vkDestroyDevice(this->device, nullptr);
     vkDestroySurfaceKHR(this->instance, this->surface, nullptr);
@@ -1971,7 +1437,7 @@ void ParticlesApp::move_action(GLFWwindow* window, glm::vec3& pos, const glm::ve
 
 void ParticlesApp::update_frame_contents(void)
 {
-    _config.cam.velocity = this->handle_move_keys(_config.movement_speed, _config.cam.yaw, MOVE_KEY_MAP);
+    _config.cam.velocity = this->handle_move_keys(_config.movement_speed, _config.cam.yaw, ParticlesConstants::MOVE_KEY_MAP);
     this->mouse_action(this->window, this->width, this->height, _config.cam.yaw, _config.cam.pitch, _config.sesitivity);
     this->move_action(this->window, _config.cam.pos, _config.cam.velocity);
 
@@ -2006,11 +1472,11 @@ void ParticlesApp::update_frame_contents(void)
     memcpy(map, &tm, sizeof(TransformMatrices));
     this->tm_buffer.unmap();
 
+    // particle shader MVP matrix
     ParticleRenderer::TransformMatrics ptm;
     ptm.view = view;
     ptm.projection = projection;
 
-    // particle shader MVP matrix
     map = this->particle_renderer.get_uniform_buffer().map(sizeof(ParticleRenderer::TransformMatrics), 0);
     memcpy(map, &ptm, sizeof(ParticleRenderer::TransformMatrics));
     this->particle_renderer.get_uniform_buffer().unmap();
@@ -2018,17 +1484,15 @@ void ParticlesApp::update_frame_contents(void)
     // main shader fragment variables
     FragmentVariables* fv = (FragmentVariables*)this->fragment_variables_buffer.map(sizeof(FragmentVariables), 0);
     fv->cam_pos = _config.cam.pos;
-    fv->kernel_radius = SHADOW_MAP_KERNEL_RADIUS;
-    fv->penumbra_size = SHADOW_PENUMBRA_SIZE;
-    fv->jitter_scale = glm::vec2(1.0f / static_cast<float>(this->vmode->width), 1.0f / static_cast<float>(this->vmode->height));
-    fv->inv_shadow_map_size = 1.0f / static_cast<float>(SHADOW_MAP_RESOLUTION);
+    fv->shadow_penumbra_size = 0.003f;
+    fv->shadow_samples = 16;
     this->fragment_variables_buffer.unmap();
 }
 
 
 void ParticlesApp::update_lights(void)
 {
-    int8_t* map = (int8_t*)this->directional_light_buffer.map(N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight), 0);
+    int8_t* map = (int8_t*)this->directional_light_buffer.map(ParticlesConstants::N_DIRECTIONAL_LIGHTS * sizeof(DirectionalLight), 0);
 
     DirectionalLight* light = shader_at(DirectionalLight, map, 0);
     *light = this->directional_light;
@@ -2038,7 +1502,7 @@ void ParticlesApp::update_lights(void)
 void ParticlesApp::update_materials(void)
 {
     // get byte pointer of mapped memory
-    int8_t* map = (int8_t*)this->material_buffer.map(N_MATERIALS * sizeof(Material), 0);
+    int8_t* map = (int8_t*)this->material_buffer.map(ParticlesConstants::N_MATERIALS * sizeof(Material), 0);
 
     // floor material
     Material* material = shader_at(Material, map, 0); // first mateial

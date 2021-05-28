@@ -39,9 +39,6 @@ layout (set = 0, binding = 1) uniform sampler2D tex[2];
 // directional shadow maps
 layout (set = 0, binding = 5) uniform sampler2DShadow directional_shadow_map;
 
-// jitter map
-layout (set = 0, binding = 6) uniform sampler3D jitter_map;
-
 // directional lights
 layout (set = 0, binding = 2) uniform DirectionalLightUniform
 {
@@ -58,39 +55,37 @@ layout (set = 0, binding = 3) uniform MaterialUniform
 layout (set = 0, binding = 4) uniform FragmentVariablesUniform
 {
     vec3 cam_pos;
-    int kernel_radius;
-    float penumbra_size;
-    vec2 jitter_scale;
-    float inv_shadow_map_size;
+    float shadow_penumbra_size;
+    int shadow_samples;
 } fragment_variables;
 
 // ---------------------------- FUNCTIONS ----------------------------
 
 float distribution_GGX(vec3 N, vec3 H, float r)
 {
-    const float a       = r*r;
-    const float a2      = a*a;
-    const float NdotH   = max(dot(N, H), 0.0f);
-    const float NdotH2  = NdotH * NdotH;
-    const float denom   = (NdotH2 * (a2 - 1.0f) + 1.0f);
+    const float a = r*r;
+    const float a2 = a*a;
+    const float NdotH = max(dot(N, H), 0.0f);
+    const float NdotH2 = NdotH * NdotH;
+    const float denom = (NdotH2 * (a2 - 1.0f) + 1.0f);
 
     return a2 / (M_PI * denom * denom);
 }
 
 float geometry_schlick_GGX(float NdotV, float r)
 {
-    const float roughness   = (r + 1.0f);
-    const float k           = (roughness*roughness) / 8.0f;
-    const float denom       = NdotV * (1.0f - k) + k;
+    const float roughness = (r + 1.0f);
+    const float k = (roughness*roughness) / 8.0f;
+    const float denom = NdotV * (1.0f - k) + k;
     return NdotV / denom;
 }
 
 float geometry_smith(vec3 N, vec3 V, vec3 L, float r)
 {
-    const float NdotV   = max(dot(N, V), 0.0f);
-    const float NdotL   = max(dot(N, L), 0.0f);
-    const float ggx1    = geometry_schlick_GGX(NdotV, r);
-    const float ggx2    = geometry_schlick_GGX(NdotL, r);
+    const float NdotV = max(dot(N, V), 0.0f);
+    const float NdotL = max(dot(N, L), 0.0f);
+    const float ggx1 = geometry_schlick_GGX(NdotV, r);
+    const float ggx2 = geometry_schlick_GGX(NdotL, r);
     return ggx1 * ggx2;
 }
 
@@ -112,15 +107,15 @@ vec3 directional_light(DirectionalLight L, Material M, vec3 V, vec3 N)
     vec3 radiance = L.intensity;
 
     const float NDF = distribution_GGX(N, H, M.roughness);
-    const float G   = geometry_smith(N, V, L.direction, M.roughness);
-    vec3 F          = frensel_schlick(H, V, F0);
+    const float G = geometry_smith(N, V, L.direction, M.roughness);
+    vec3 F = frensel_schlick(H, V, F0);
 
     vec3 kd = vec3(1.0f) - F;
     kd *= 1.0f - M.metallic;
 
-    vec3 numerator      = NDF * F * G;
-    const float denom   = 4.0f * max(dot(V, N), 0.0f) * max(dot(L.direction, N), 0.0f);
-    vec3 specular       = numerator / max(denom, 0.001f);
+    vec3 numerator = NDF * F * G;
+    const float denom = 4.0f * max(dot(V, N), 0.0f) * max(dot(L.direction, N), 0.0f);
+    vec3 specular = numerator / max(denom, 0.001f);
 
     float NdotL = max(dot(N, L.direction), 0.0f);
     return (kd * (M.albedo / M_PI) + specular) * radiance * NdotL;
@@ -190,6 +185,7 @@ float shadow_value(vec4 light_space_pos, int samples, float penumbra_size, float
 
     return visibility / samples; // visibility range [0, +1]
 }
+
 // ---------------------------- MAIN ----------------------------
 
 void main()
@@ -201,12 +197,7 @@ void main()
     vec3 view_vec = fragment_variables.cam_pos - f_pos;
     float NdotL = dot(f_normal, normalize(-dlu.lights[0].direction));
 
-    float shadow = shadow_value(
-        f_light_space_pos, 
-        16,
-        0.005f,
-        NdotL
-    );
+    float shadow = shadow_value(f_light_space_pos, fragment_variables.shadow_samples, fragment_variables.shadow_penumbra_size, NdotL);
 
     vec3 light_intensity = directional_light(dlu.lights[0], mtlu.materials[f_instanceID], view_vec, f_normal) * shadow;
     vec3 hdr_color = (light_intensity + mtlu.materials[f_instanceID].albedo) * tex_color.rgb;

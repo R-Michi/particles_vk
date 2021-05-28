@@ -26,7 +26,18 @@ link_directories(
 )
 
 # compile and link executable
-add_executable(particles "main.cpp" "VulkanApp.cpp" "particles/particle.cpp" "particles/particle_engine.cpp" "particles/vertex.cpp" "particles/particle_renderer.cpp" "random/random.cpp")
+add_executable(particles 
+    "main.cpp" 
+    "VulkanApp.cpp" 
+    "particles/particle.cpp" 
+    "particles/particle_engine.cpp" 
+    "particles/vertex.cpp" 
+    "particles/particle_renderer.cpp" 
+    "random/random.cpp" 
+    "application/onscreen.cpp" 
+    "application/shadow_map.cpp"
+ "application/descriptor_manager.cpp")
+
 target_link_libraries(particles PRIVATE
     "-lvulkan_abstraction"
     "-lglm_static" 

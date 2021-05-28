@@ -8,58 +8,8 @@
 
 #include "particles/particles.h"
 
-class ParticlesApp
+namespace ParticlesConstants
 {
-public:
-    struct Camera
-    {
-        glm::vec3 velocity;
-        glm::vec3 pos;
-        double yaw, pitch;
-    };
-
-    struct Config
-    {
-        Camera cam;
-        float movement_speed;
-        float sesitivity;
-    };
-
-    struct DirectionalLight
-    {
-        alignas(16) glm::vec3 direction;
-        alignas(16) glm::vec3 intensity;
-    };
-
-    struct Material
-    {
-        glm::vec3 albedo;
-        float roughness;
-        float metallic;
-        float alpha;
-    };
-
-    struct FragmentVariables
-    {
-        alignas(16) glm::vec3 cam_pos;
-        alignas(4)  int kernel_radius;
-        alignas(4)  float penumbra_size;
-        alignas(8)  glm::vec2 jitter_scale;
-        alignas(4)  float inv_shadow_map_size;
-    };
-
-private:
-    struct ShadowTransformMatrices
-    {
-        glm::mat4 MVP;
-    };
-
-    struct TransformMatrices
-    {
-        glm::mat4 MVP;
-        glm::mat4 light_MVP;
-    };
-
     /* CONSTANTS */
     constexpr static uint32_t SWAPCHAIN_IMAGES = 3;
     constexpr static VkImageUsageFlags SWAPCHAIN_IMAGE_USAGE = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -94,6 +44,142 @@ private:
 
     // keys
     constexpr static int MOVE_KEY_MAP[6] = { 'W', 'D', 'S', 'A', GLFW_KEY_SPACE, GLFW_KEY_LEFT_SHIFT };
+};
+
+struct OnscreenRenderPass
+{
+    VkSwapchainKHR swapchain{ VK_NULL_HANDLE };
+    vka::AttachmentImage depth_attachment;
+    VkRenderPass render_pass;
+    std::vector<VkImageView> views; // color attachments
+    std::vector<VkFramebuffer> fbos;
+
+    void init(VkPhysicalDevice physical_device, VkDevice device, VkSurfaceKHR surface, uint32_t queue_fam_index, uint32_t width, uint32_t height);
+    void clear(VkDevice device);
+
+private:
+    void init_swapchain(VkDevice device, VkSurfaceKHR surface, uint32_t queue_fam_index, uint32_t width, uint32_t height);
+    void init_depth_attachment(VkPhysicalDevice physical_device, VkDevice device, uint32_t queue_fam_index, uint32_t width, uint32_t height);
+    void init_render_pass(VkDevice device);
+    void init_fbos(VkDevice device, uint32_t width, uint32_t height);
+};
+
+struct ShadowMap
+{
+    vka::AttachmentImage depth_attachment;
+    VkSampler sampler;
+    VkRenderPass render_pass;
+    VkFramebuffer fbo;
+
+    void init(VkPhysicalDevice physical_device, VkDevice device, uint32_t queue_fam_index, uint32_t resolution);
+    void clear(VkDevice device);
+
+private:
+    void init_depth_attachment(VkPhysicalDevice physical_device, VkDevice device, uint32_t queue_fam_index, uint32_t resolution);
+    void init_sampler(VkDevice device);
+    void init_render_pass(VkDevice device);
+    void init_fbo(VkDevice device, uint32_t resolution);
+};
+
+class DescriptorManager
+{
+private:
+    // handles
+    VkDescriptorPool pool;
+    std::vector<VkDescriptorSetLayout> set_layouts;
+    std::vector<VkDescriptorSet> sets;
+
+    // descriptor structs
+    std::vector<VkDescriptorPoolSize> pool_sizes;
+    std::vector< std::vector<VkDescriptorSetLayoutBinding> > set_layout_bindings;
+    std::vector<VkWriteDescriptorSet> descriptor_writes;
+
+    // requiered
+    VkDevice device;
+
+    VkResult init_descriptor_layouts(void);
+    VkResult init_descriptor_pool(void);
+    VkResult init_descriptor_sets(void);
+
+    void add_to_pool_sizes(VkDescriptorType type, uint32_t count);
+    void init_descriptor_write(VkWriteDescriptorSet& write, uint32_t set, uint32_t binding, uint32_t begin_element, uint32_t n_elements);
+
+public:
+    DescriptorManager(void);
+    DescriptorManager(VkDevice device, uint32_t n_sets);
+    virtual ~DescriptorManager(void);
+
+    void set_device(VkDevice device);
+    void set_number_of_sets(uint32_t n_sets);
+
+    // methods for initialization
+    // these methods MUST NOT be called after initialization
+    void add_binding(uint32_t set, uint32_t binding, VkDescriptorType type, uint32_t count, VkShaderStageFlags stage);
+
+    // methods for update
+    void add_buffer_info(uint32_t set, uint32_t binding, uint32_t begin_element, uint32_t n_elements, const VkDescriptorBufferInfo* buffer_infos);
+    void add_image_info(uint32_t set, uint32_t binding, uint32_t begin_element, uint32_t n_elements, const VkDescriptorImageInfo* image_infos);
+    void add_texel_buffer_view(uint32_t set, uint32_t binding, uint32_t begin_element, uint32_t n_elements, const VkBufferView* buffer_views);
+
+    VkResult init(void);
+    void update(void);
+    void clear(void);
+
+    VkDescriptorPool get_pool(void) const noexcept { return this->pool; }
+    const std::vector<VkDescriptorSetLayout>& get_layouts(void) const noexcept { return this->set_layouts; }
+    const std::vector<VkDescriptorSet>& get_sets(void) const noexcept  { return this->sets; }
+};
+
+class ParticlesApp
+{
+public:
+    struct Camera
+    {
+        glm::vec3 velocity;
+        glm::vec3 pos;
+        double yaw, pitch;
+    };
+
+    struct Config
+    {
+        Camera cam;
+        float movement_speed;
+        float sesitivity;
+    };
+
+    struct DirectionalLight
+    {
+        alignas(16) glm::vec3 direction;
+        alignas(16) glm::vec3 intensity;
+    };
+
+    struct Material
+    {
+        glm::vec3 albedo;
+        float roughness;
+        float metallic;
+        float alpha;
+    };
+
+    struct FragmentVariables
+    {
+        alignas(16) glm::vec3 cam_pos;
+        alignas(4)  float shadow_penumbra_size;
+        alignas(4)  int shadow_samples;
+    };
+
+    struct ShadowTransformMatrices
+    {
+        glm::mat4 MVP;
+    };
+
+    struct TransformMatrices
+    {
+        glm::mat4 MVP;
+        glm::mat4 light_MVP;
+    };
+
+private:
 
     /* STATIC PRIVATE MEMBERS */
     inline static Config _config;   // config must be global and there will only be one instance
@@ -114,17 +200,11 @@ private:
     uint32_t graphics_queue_family_index;
     VkQueue graphics_queue;
 
-    VkSwapchainKHR swapchain;
-    std::vector<VkImageView> swapchain_views;
-    std::vector<VkFramebuffer> swapchain_fbos;
-    VkFramebuffer fbo_dir_shadow;
+    OnscreenRenderPass onscreen_renderpass;
+    ShadowMap directional_shadow_map;
 
-    vka::AttachmentImage depth_attachment;
-    VkRenderPass renderpass_main;
-
-    vka::AttachmentImage directional_shadow_map;
-    VkSampler dir_shadow_sampler;
-    VkRenderPass renderpass_dir_shadow;
+    DescriptorManager main_descr_manager;
+    DescriptorManager dir_shadow_descr_manager;
 
     // pipeline of static scene (floor + fountain)
     VkPipelineLayout pipeline_layout;
@@ -150,23 +230,12 @@ private:
     vka::Buffer fountain_vertex_buffer, fountain_index_buffer;
     vka::Texture fountain_texture;
 
-    // other textures
-    vka::Texture jitter_map;
-
     // uniform buffers
     vka::Buffer tm_buffer;  // transform matrices buffer
     vka::Buffer directional_light_buffer;
     vka::Buffer material_buffer;
     vka::Buffer fragment_variables_buffer;
     vka::Buffer tm_buffer_dir_shadow;
-
-    VkDescriptorPool descriptor_pool;
-    std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
-    std::vector<VkDescriptorSet> descriptor_sets;
-
-    VkDescriptorPool descriptor_pool_dir_shadow;
-    std::vector<VkDescriptorSetLayout> descriptor_set_layouts_dir_shadow;
-    std::vector<VkDescriptorSet> descriptor_sets_dir_shadow;
 
     VkSemaphore image_ready, rendering_done;
     VkFence render_fence;
@@ -192,20 +261,14 @@ private:
     void create_physical_device(void);
     void create_queues(void);
     void create_device(void);
-    void create_swapchain(void);
 
-    void create_depth_attachment(void);
-    void create_render_pass(void);
-
-    void create_shadow_maps(void);
-    void create_shadow_renderpasses(void);
+    void init_main_descriptor_manager(void);
+    void init_dir_shadow_descriptor_manager(void);
 
     static void get_vertex323_descriptions(std::vector<VkVertexInputBindingDescription>& bindings, std::vector<VkVertexInputAttributeDescription>& attributes);
     void create_pipeline(void);
     void create_shadow_pipelines(void);
 
-    void create_framebuffers(void);
-    void create_shadow_framebuffers(void);
     void create_command_pool(void);
     void create_command_buffers(void);
 
@@ -213,11 +276,6 @@ private:
     void create_index_buffers(void);
     void create_uniform_buffers(void);
     void create_textures(void);
-
-    void create_desciptor_pools(void);
-    void create_desciptor_set_layouts(void);
-    void create_descriptor_sets(void);
-    void create_descriptor_sets_dir_shadow(void);
 
     void create_semaphores(void);
 
