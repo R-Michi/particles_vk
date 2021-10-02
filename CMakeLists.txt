@@ -29,14 +29,15 @@ link_directories(
 add_executable(particles 
     "main.cpp" 
     "VulkanApp.cpp" 
-    "particles/particle.cpp" 
-    "particles/particle_engine.cpp" 
-    "particles/vertex.cpp" 
-    "particles/particle_renderer.cpp" 
     "random/random.cpp" 
     "application/onscreen.cpp" 
     "application/shadow_map.cpp"
- "application/descriptor_manager.cpp")
+    "application/descriptor_manager.cpp" 
+    "particles/particle_types.cpp" 
+    "particles/particle_renderer_init.cpp" 
+    "particles/particle_renderer_other.cpp"
+    "particles/particle_pool.cpp"
+ "main_application.cpp" "particles/particle_engine.cpp" "particles/static_particle_engine.cpp")
 
 target_link_libraries(particles PRIVATE
     "-lvulkan_abstraction"

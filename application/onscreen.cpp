@@ -148,6 +148,33 @@ void OnscreenRenderPass::init(VkPhysicalDevice physical_device, VkDevice device,
     this->init_fbos(device, width, height);
 }
 
+void OnscreenRenderPass::reshape(VkPhysicalDevice physical_device, VkDevice device, VkSurfaceKHR surface, uint32_t queue_fam_index, uint32_t width, uint32_t height)
+{
+    this->destroy_views(device);
+    this->init_swapchain(device, surface, queue_fam_index, width, height);
+
+    this->depth_attachment.clear();
+    this->init_depth_attachment(physical_device, device, queue_fam_index, width, height);
+
+    this->destroy_fbos(device);
+    this->init_fbos(device, width, height);
+}
+
+
+void OnscreenRenderPass::destroy_fbos(VkDevice device)
+{
+    for (VkFramebuffer fbo : this->fbos)
+        vkDestroyFramebuffer(device, fbo, nullptr);
+    this->fbos.clear();
+}
+
+void OnscreenRenderPass::destroy_views(VkDevice device)
+{
+    for (VkImageView view : this->views)
+        vkDestroyImageView(device, view, nullptr);
+    this->views.clear();
+}
+
 void OnscreenRenderPass::clear(VkDevice device)
 {
     for (VkFramebuffer fbo : this->fbos)

@@ -161,11 +161,11 @@ float shadow_value(vec4 light_space_pos, int samples, float penumbra_size, float
 
     float visibility = 0.0f;
     vec3 sm_coords = light_project_coords;
+    const float noise = interleaved_gradient_noise(gl_FragCoord.xy) * M_2PI;
 
     // take a few test samples
     for(int i = samples - 1; i >= test_samples_end; i--)
     {
-        const float noise = interleaved_gradient_noise(gl_FragCoord.xy) * M_2PI;
         sm_coords.xy = vogeldisk_sample(i, samples, noise, penumbra_size, light_project_coords.xy);
         visibility += texture(directional_shadow_map, sm_coords);
     }
@@ -178,7 +178,6 @@ float shadow_value(vec4 light_space_pos, int samples, float penumbra_size, float
     // expensive sampling reduced to as few pixels as possible
     for(int i = test_samples_end - 1; i >= 0; i--)
     {
-        const float noise = interleaved_gradient_noise(gl_FragCoord.xy) * M_2PI;
         sm_coords.xy = vogeldisk_sample(i, samples, noise, penumbra_size, light_project_coords.xy);
         visibility += texture(directional_shadow_map, sm_coords);
     }

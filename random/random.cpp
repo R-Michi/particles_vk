@@ -2,7 +2,7 @@
 
 std::random_device rd;
 std::seed_seq seed{ rd(), rd(), rd(), rd(), rd(), rd(), rd(), rd() };
-std::mt19937 rand_engine(seed);
+std::minstd_rand rand_engine(seed);
 
 float __internal_random::uniform_real_dist(float min, float max)
 {

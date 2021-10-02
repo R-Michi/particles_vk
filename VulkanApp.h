@@ -1,3 +1,5 @@
+#pragma once
+
 #define GLFW_INCLUDE_VULKAN
 #define VULKAN_ABSTRACTION_DEBUG
 #define VULKAN_ABSTRACTION_EXPERIMENTAL
@@ -5,6 +7,8 @@
 #include <GLFW/glfw3.h>
 #include <vulkan/vulkan_absraction.h>
 #include <glm/glm.hpp>
+#include <thread>
+#include <atomic>
 
 #include "particles/particles.h"
 
@@ -55,6 +59,7 @@ struct OnscreenRenderPass
     std::vector<VkFramebuffer> fbos;
 
     void init(VkPhysicalDevice physical_device, VkDevice device, VkSurfaceKHR surface, uint32_t queue_fam_index, uint32_t width, uint32_t height);
+    void reshape(VkPhysicalDevice physical_device, VkDevice device, VkSurfaceKHR surface, uint32_t queue_fam_index, uint32_t width, uint32_t height);
     void clear(VkDevice device);
 
 private:
@@ -62,6 +67,9 @@ private:
     void init_depth_attachment(VkPhysicalDevice physical_device, VkDevice device, uint32_t queue_fam_index, uint32_t width, uint32_t height);
     void init_render_pass(VkDevice device);
     void init_fbos(VkDevice device, uint32_t width, uint32_t height);
+
+    void destroy_fbos(VkDevice device);
+    void destroy_views(VkDevice device);
 };
 
 struct ShadowMap
@@ -72,6 +80,7 @@ struct ShadowMap
     VkFramebuffer fbo;
 
     void init(VkPhysicalDevice physical_device, VkDevice device, uint32_t queue_fam_index, uint32_t resolution);
+    void reshape(VkPhysicalDevice physical_device, VkDevice device, uint32_t queue_fam_index, uint32_t resolution);
     void clear(VkDevice device);
 
 private:
@@ -129,6 +138,7 @@ public:
     const std::vector<VkDescriptorSetLayout>& get_layouts(void) const noexcept { return this->set_layouts; }
     const std::vector<VkDescriptorSet>& get_sets(void) const noexcept  { return this->sets; }
 };
+
 
 class ParticlesApp
 {
@@ -240,9 +250,10 @@ private:
     VkSemaphore image_ready, rendering_done;
     VkFence render_fence;
 
-    ParticleRenderer particle_renderer;
-    ParticleEngine particle_engine;
     DirectionalLight directional_light;
+    particles::ParticleRenderer particle_renderer;
+    std::thread application_thread;
+    std::atomic_bool renderer_shutdown;
 
     void load_models(void);
     void load_floor(void);
@@ -254,6 +265,7 @@ private:
     void destry_glfw(void);
 
     void init_vulkan(void);
+    void reshape(void);
     void create_app_info(void);
     void create_instance(void);
     void create_surface(void);
@@ -298,7 +310,14 @@ private:
     void update_materials(void);
 
     static float get_depth_bias(float bias, uint32_t depth_bits);
-    
+
+    // this thread separates the renderer thread (main thread) from updating physics, animations, etc.
+    // but has full access to the contents of the renderer thread, like a new 'int main()' but with an
+    // rendering engine in the background
+    void start_application_thread(void);
+    void stop_application_thread(void);
+    static void application_main(ParticlesApp*);
+
 public:
     ParticlesApp(void);
     virtual ~ParticlesApp(void);

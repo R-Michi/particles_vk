@@ -13,7 +13,7 @@
     #define M_PI 3.14159265358979323846
 #endif
 
-#define VALIDATION_LAYERS 1
+#define VALIDATION_LAYERS 0
 #define DISPLAY_SHADOW_MAP 0
 #define shader_sizeof(type)     (((sizeof(type) / 16) + 1) * 16)
 #define shader_at(type, ptr, i) ((type*)(ptr + shader_sizeof(type) * i))
@@ -24,7 +24,7 @@ void __key_callback(GLFWwindow* window, int key, int scancode, int action, int m
 
 ParticlesApp::ParticlesApp(void)
 {
-    
+
 }
 
 ParticlesApp::~ParticlesApp(void)
@@ -85,7 +85,7 @@ void ParticlesApp::init_glfw(void)
 {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     GLFWmonitor* monitor = glfwGetPrimaryMonitor();
     this->vmode = glfwGetVideoMode(monitor);
@@ -141,12 +141,55 @@ void ParticlesApp::init_vulkan(void)
     this->create_pipeline();
     this->create_shadow_pipelines();
 
-
     this->create_semaphores();
 
     this->init_particles();
     
     this->record_commands();
+}
+
+void ParticlesApp::reshape(void)
+{
+    constexpr int WIN_MIN_DIM = 100;
+
+    // test if width or height has changed
+    int w, h;
+    glfwGetWindowSize(this->window, &w, &h);
+
+    if (this->width != w || this->height != h)
+    {
+        // window dimmensions must not get smaller than 1
+        if (w < WIN_MIN_DIM || h < WIN_MIN_DIM)
+            glfwSetWindowSize(this->window, ((w >= WIN_MIN_DIM) ? w : w = WIN_MIN_DIM), ((h >= WIN_MIN_DIM) ? h : h = WIN_MIN_DIM));
+        // update window dimensions
+        this->width = w;
+        this->height = h;
+
+        // IMPORTANT: wait until device does not execute any operations
+        vkDeviceWaitIdle(this->device);
+
+        // reinitialize vulkan objects that depend on the window dimensions
+        this->onscreen_renderpass.reshape(this->physical_device, this->device, this->surface, this->graphics_queue_family_index, this->width, this->height);
+
+        // rerecord command buffers
+        // pipelines dont have to be reinitialized because they use dynamic Viewport and Scissor states
+        particles::ParticleRendererRecordInfo renderer_ri = {};
+        renderer_ri.render_pass = this->onscreen_renderpass.render_pass;
+        renderer_ri.sub_pass = 0;
+        renderer_ri.framebuffer = VK_NULL_HANDLE;   // it is not clear in which framebuffer the commands get executed, there are actually 3 different framebuffers
+        renderer_ri.viewport.width = static_cast<uint32_t>(this->width);
+        renderer_ri.viewport.height = static_cast<uint32_t>(this->height);
+        renderer_ri.viewport.x = 0;
+        renderer_ri.viewport.y = 0;
+        renderer_ri.viewport.minDepth = 0.0f;
+        renderer_ri.viewport.maxDepth = 1.0f;
+        renderer_ri.scissor.offset = { 0, 0 };
+        renderer_ri.scissor.extent = { static_cast<uint32_t>(this->width), static_cast<uint32_t>(this->height) };
+
+        this->record_static_scene();
+        this->particle_renderer.record(renderer_ri);
+        this->record_primary_commands();
+    }
 }
 
 void ParticlesApp::create_app_info(void)
@@ -164,6 +207,7 @@ void ParticlesApp::create_app_info(void)
 void ParticlesApp::create_instance(void)
 {
     std::vector<const char*> layers;
+    layers.push_back("VK_LAYER_LUNARG_monitor");
 #if VALIDATION_LAYERS
     layers.push_back("VK_LAYER_LUNARG_standard_validation");
     layers.push_back("VK_LAYER_KHRONOS_validation");
@@ -203,6 +247,17 @@ void ParticlesApp::create_instance(void)
 
     VkResult result = vkCreateInstance(&instance_create_info, nullptr, &this->instance);
     VULKAN_ASSERT(result);
+
+    // print all instance layers
+    uint32_t n_layers;
+    vkEnumerateInstanceLayerProperties(&n_layers, nullptr);
+    VkLayerProperties layer_properties[n_layers];
+    vkEnumerateInstanceLayerProperties(&n_layers, layer_properties);
+
+    std::cout << "Aviable instance layers:" << std::endl;
+    for (uint32_t i = 0; i < n_layers; i++)
+        std::cout << "\t" << layer_properties[i].layerName << std::endl;
+    std::cout << std::endl;
 }
 
 void ParticlesApp::create_surface(void)
@@ -240,6 +295,18 @@ void ParticlesApp::create_physical_device(void)
         throw std::runtime_error(vka::physical_device_strerror(error));
 
     this->physical_device = physical_devices[device_index];
+
+    // print aviable device layers
+    uint32_t n_layers;
+    vkEnumerateDeviceLayerProperties(this->physical_device, &n_layers, nullptr);
+    VkLayerProperties device_layers[n_layers];
+    vkEnumerateDeviceLayerProperties(this->physical_device, &n_layers, device_layers);
+
+    std::cout << "Aviable device Layers:" << std::endl;
+    for (uint32_t i = 0; i < n_layers; i++)
+        std::cout << "\t" << device_layers[i].layerName << std::endl;
+    std::cout << std::endl;
+
     std::cout << "Physical device found: " << properties[device_index].deviceName << std::endl;
 }
 
@@ -1039,68 +1106,42 @@ void ParticlesApp::create_semaphores(void)
 
 void ParticlesApp::init_particles(void)
 {
-    constexpr static size_t n_particles = 1000;
+    particles::ParticleRendererInitInfo renderer_ii = {};
+    renderer_ii.vertex_shader_path = ParticlesConstants::PARTICLE_VERTEX_PATH;
+    renderer_ii.geometry_shader_path = ParticlesConstants::PARTICLE_GEOMETRY_PATH;
+    renderer_ii.fragment_shader_path = ParticlesConstants::PARTICLE_FRAGMENT_PATH;
+    renderer_ii.particle_texture_path = ParticlesConstants::TEXTURE_PARTICLE;
+    renderer_ii.physical_device = this->physical_device;
+    renderer_ii.device = this->device;
+    renderer_ii.render_pass = this->onscreen_renderpass.render_pass;
+    renderer_ii.sub_pass = 0;
+    renderer_ii.external_command_pool = true;
+    renderer_ii.command_pool = this->command_pool;
+    renderer_ii.queue_family_index = this->graphics_queue_family_index;
+    renderer_ii.queue = this->graphics_queue;
+    renderer_ii.buffer_capacity = 1000000;
 
-    vka::Shader particle_vert(this->device), particle_geom(this->device), particle_frag(this->device);
-    particle_vert.load(ParticlesConstants::PARTICLE_VERTEX_PATH, VK_SHADER_STAGE_VERTEX_BIT);
-    particle_geom.load(ParticlesConstants::PARTICLE_GEOMETRY_PATH, VK_SHADER_STAGE_GEOMETRY_BIT);
-    particle_frag.load(ParticlesConstants::PARTICLE_FRAGMENT_PATH, VK_SHADER_STAGE_FRAGMENT_BIT);
-
-    vka::ShaderProgram program;
-    program.attach(particle_vert);
-    program.attach(particle_geom);
-    program.attach(particle_frag);
-
-    ParticleRenderer::Config particle_config = {};
-    particle_config.physical_device = this->physical_device;
-    particle_config.device = this->device;
-    particle_config.render_pass = this->onscreen_renderpass.render_pass;
-    particle_config.subpass = 0;
-    particle_config.family_index = this->graphics_queue_family_index;
-    particle_config.graphics_queue = this->graphics_queue;
-    particle_config.p_program = &program;
-    particle_config.texture_path = ParticlesConstants::TEXTURE_PARTICLE;
-    particle_config.scr_width = this->width;
-    particle_config.scr_height = this->height;
-    particle_config.max_particles = n_particles;
-
-    this->particle_renderer.init(particle_config);
-    this->particle_renderer.record(particle_config);
-
-#if 0
-    Particle particle1({ 4.0f,4.0f,4.0f }, { 0.0f,1.0f,0.0f,0.5f }, 0.5f, { 0.0f,0.0f,0.0f }, std::chrono::milliseconds(0));
-    Particle particle2({ 5.0f,4.0f,4.0f }, { 0.0f,0.0f,1.0f,0.5f }, 0.5f, { 0.0f,0.0f,0.0f }, std::chrono::milliseconds(0));
-
-    particle_vertex_t* map = (particle_vertex_t*)this->particle_renderer.get_vertex_buffer().map(2 * sizeof(particle_vertex_t), 0);
-    map[0] = particle1.vertex();
-    map[1] = particle2.vertex();
-    this->particle_renderer.get_vertex_buffer().unmap();
-#else
-    ParticleEngine::Config engine_config = {};
-    engine_config.n_particles = n_particles;
-    engine_config.renderer = &this->particle_renderer;
-    engine_config.spawn_pos = { 0.0f, 2.5f, 0.0f };
-    engine_config.gravity = 9.81f;
-    engine_config.min_bf = 0.7f;
-    engine_config.max_bf = 0.9f;
-    engine_config.velocity_mean = { 0.0f, 5.0f, 0.0f };
-    engine_config.velocity_sigma = { 3.0f, 2.0f, 3.0f };
-    engine_config.min_size = 0.15f;
-    engine_config.max_size = 0.20f;
-    engine_config.ground_level = 0.0f;
-    engine_config.min_ttl = std::chrono::milliseconds(15000);
-    engine_config.max_ttl = std::chrono::milliseconds(16000);
-
-    this->particle_engine.init(engine_config);
-    this->particle_engine.start(std::chrono::milliseconds(3000));
-#endif
+    VULKAN_ASSERT(this->particle_renderer.init(renderer_ii));
 }
 
 void ParticlesApp::record_commands(void)
 {
-    /* recording of particles's command buffer is in method "init_particles()" */
+    particles::ParticleRendererRecordInfo renderer_ri = {};
+    renderer_ri.render_pass = this->onscreen_renderpass.render_pass;
+    renderer_ri.sub_pass = 0;
+    renderer_ri.framebuffer = VK_NULL_HANDLE;   // it is not clear in which framebuffer the commands get executed, there are actually 3 different framebuffers
+    renderer_ri.viewport.width = static_cast<uint32_t>(this->width);
+    renderer_ri.viewport.height = static_cast<uint32_t>(this->height);
+    renderer_ri.viewport.x = 0;
+    renderer_ri.viewport.y = 0;
+    renderer_ri.viewport.minDepth = 0.0f;
+    renderer_ri.viewport.maxDepth = 1.0f;
+    renderer_ri.scissor.offset = { 0, 0 };
+    renderer_ri.scissor.extent = { static_cast<uint32_t>(this->width), static_cast<uint32_t>(this->height) };
+
     this->record_dir_shadow_map();
     this->record_static_scene();
+    this->particle_renderer.record(renderer_ri);
     this->record_primary_commands();
 }
 
@@ -1325,12 +1366,11 @@ void ParticlesApp::destroy_vulkan(void)
 {
     vkDeviceWaitIdle(this->device);
 
-    this->particle_engine.stop();
-    this->particle_renderer.clear();
-
     vkDestroyFence(this->device, this->render_fence, nullptr);
     vkDestroySemaphore(this->device, this->image_ready, nullptr);
     vkDestroySemaphore(this->device, this->rendering_done, nullptr);
+
+    this->particle_renderer.clear(this->device);
 
     vkDestroyPipeline(this->device, this->pipeline, nullptr);
     vkDestroyPipelineLayout(this->device, this->pipeline_layout, nullptr);
@@ -1472,14 +1512,8 @@ void ParticlesApp::update_frame_contents(void)
     memcpy(map, &tm, sizeof(TransformMatrices));
     this->tm_buffer.unmap();
 
-    // particle shader MVP matrix
-    ParticleRenderer::TransformMatrics ptm;
-    ptm.view = view;
-    ptm.projection = projection;
-
-    map = this->particle_renderer.get_uniform_buffer().map(sizeof(ParticleRenderer::TransformMatrics), 0);
-    memcpy(map, &ptm, sizeof(ParticleRenderer::TransformMatrics));
-    this->particle_renderer.get_uniform_buffer().unmap();
+    // particle shader transformation matrices
+    this->particle_renderer.set_view_projection(view, projection);
 
     // main shader fragment variables
     FragmentVariables* fv = (FragmentVariables*)this->fragment_variables_buffer.map(sizeof(FragmentVariables), 0);
@@ -1528,36 +1562,34 @@ float ParticlesApp::get_depth_bias(float bias, uint32_t depth_bits)
 }
 
 
+void ParticlesApp::start_application_thread(void)
+{
+    this->application_thread = std::thread(application_main, this);
+}
+
+void ParticlesApp::stop_application_thread(void)
+{
+    this->application_thread.join();
+}
+
+
 void ParticlesApp::ParticlesApp::run(void)
 {
-    std::vector<double> time_stamps;
-    double t1s = glfwGetTime();
     while (!glfwGetKey(this->window, GLFW_KEY_ESCAPE) && !glfwWindowShouldClose(this->window))
     {
         double t0 = glfwGetTime();
         glfwPollEvents();
+        this->reshape();
         this->update_frame_contents();
         this->draw_frame();
         double t1 = glfwGetTime();
-        time_stamps.push_back(t1 - t0);
-
-        if ((t1 - t1s) >= 1.0)
-        {
-            double avg = 0.0;
-            for (double d : time_stamps)
-                avg += d;
-            avg /= static_cast<double>(time_stamps.size());
-            this->render_time = avg;
-            t1s = glfwGetTime();
-            time_stamps.clear();
-
-            std::cout << "\rAVG FPS: " << 1.0 / avg << " AVG MSPF: " << avg * 1000.0 << "                   ";
-        }
+        this->render_time = t1 - t0;
     }
 }
 
 void ParticlesApp::init(void)
 {
+    this->renderer_shutdown = false;
     this->load_models();
     this->init_lights();
     this->init_glfw();
@@ -1565,10 +1597,14 @@ void ParticlesApp::init(void)
 
     this->update_lights();
     this->update_materials();
+
+    this->start_application_thread();
 }
 
 void ParticlesApp::shutdown(void)
 {
+    this->renderer_shutdown = true;
+    this->stop_application_thread();
     this->destroy_vulkan();
     this->destry_glfw();
 }

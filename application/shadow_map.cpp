@@ -42,7 +42,6 @@ void ShadowMap::init_sampler(VkDevice device)
 
 void ShadowMap::init_render_pass(VkDevice device)
 {
-
     VkAttachmentDescription attachment = {};
     attachment.flags = 0;
     attachment.format = ParticlesConstants::SHADOW_DEPTH_FORMAT;
@@ -116,6 +115,15 @@ void ShadowMap::init(VkPhysicalDevice physical_device, VkDevice device, uint32_t
     this->init_depth_attachment(physical_device, device, queue_fam_index, resolution);
     this->init_sampler(device);
     this->init_render_pass(device);
+    this->init_fbo(device, resolution);
+}
+
+void ShadowMap::reshape(VkPhysicalDevice physical_device, VkDevice device, uint32_t queue_fam_index, uint32_t resolution)
+{
+    this->depth_attachment.clear();
+    this->init_depth_attachment(physical_device, device, queue_fam_index, resolution);
+
+    vkDestroyFramebuffer(device, this->fbo, nullptr);
     this->init_fbo(device, resolution);
 }
 
